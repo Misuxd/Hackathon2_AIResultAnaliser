@@ -4,14 +4,14 @@ import os
 import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 
 
 @contextmanager
 def connection():
     path = os.getenv("GEO_DB_PATH", ".data/audits.sqlite3")
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with sqlite3.connect(path, timeout=10) as db:
+    with closing(sqlite3.connect(path, timeout=10)) as db, db:
         db.row_factory = sqlite3.Row
         yield db
 

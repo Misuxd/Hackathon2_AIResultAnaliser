@@ -71,7 +71,7 @@ npm run build
 npm run test:e2e
 ```
 
-Browser checks use `/usr/bin/chromium`; set `CHROMIUM_PATH` for a different installed Chromium. Playwright starts services if needed. Backend tests use temporary databases; browser tests create labelled synthetic audits in the local database. Screenshots/traces go to ignored `frontend/test-results/`.
+Browser checks use installed Google Chrome on Windows and `/usr/bin/chromium` on Linux. Set `CHROMIUM_PATH` to use a different Chromium executable. Playwright starts services if needed. Backend tests use temporary databases; browser tests create labelled synthetic audits in the local database. Screenshots/traces go to ignored `frontend/test-results/`.
 
 ## Deployment boundaries
 
