@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+backend/.data/
+frontend/node_modules/
+frontend/dist/
+test-results/
+.playwright/
