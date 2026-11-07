@@ -203,6 +203,59 @@ test('a live audit shows successful answers and only relevant websites', async (
   await expect(page.locator('.source-links a[href="https://anpc.ro/"]')).toBeVisible();
 });
 
+test('optimizer shows a search-based review with links to the sources it used', async ({ page }) => {
+  const source = 'https://altex.ro/televizoare/';
+  await page.route('**/api/v1/health', route => route.fulfill({ json: { status: 'ok', fetch_hosts: [],
+    providers: [{ id: 'openai', configured: true, model: 'test-model' }] } }));
+  await page.route('**/api/v1/optimize', route => {
+    expect(route.request().postDataJSON()).toMatchObject({ target_url: 'https://altex.ro/', fetch_page: true, mode: 'ai' });
+    return route.fulfill({ json: { mode: 'ai', source_kind: 'web_search', target_url: 'https://altex.ro/',
+      recommendations: [{ title: 'Compare HDR support', evidence: 'The TV category lists models.', source_url: source,
+        change: 'Add supported HDR formats to the model comparison.', why: 'Answers the buyer question.' }], checks: [] } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'GEO optimizer', exact: true }).click();
+  await page.getByLabel('Buyer question', { exact: true }).fill('Which televisions support HDR?');
+  await page.getByLabel('Brand name', { exact: true }).fill('Altex');
+  await page.getByLabel('Product page URL', { exact: true }).fill('https://altex.ro/');
+  await page.getByRole('button', { name: 'Review page with AI' }).click();
+  await expect(page.getByRole('heading', { name: 'Public search review' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'View source', exact: true })).toHaveAttribute('href', source);
+  await expect(page.getByRole('button', { name: 'Copy code', exact: true })).toHaveCount(0);
+});
+
+test('optimizer recovers from a blocked fetch with browser page content', async ({ page }) => {
+  await page.route('**/api/v1/health', route => route.fulfill({ json: { status: 'ok', fetch_hosts: [],
+    providers: [{ id: 'openai', configured: true, model: 'test-model' }] } }));
+  const requests: Record<string, unknown>[] = [];
+  await page.route('**/api/v1/optimize', route => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (body.fetch_page) return route.fulfill({ status: 422, json: { detail: {
+      code: 'page_access_denied', message: 'The website refused the optimizer’s page request (HTTP 403).',
+    } } });
+    return route.fulfill({ json: { mode: 'ai', target_url: 'https://altex.ro/', source_characters: 85,
+      recommendations: [{ title: 'Add a product comparison', evidence: 'Visible product details', change: 'Compare supported features.', why: 'Addresses the buyer question.' }],
+      checks: [], optimized_markdown: '# Draft', json_ld_script: '', llms_txt: '', warnings: [] } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'GEO optimizer', exact: true }).click();
+  await page.getByLabel('Buyer question', { exact: true }).fill('Which televisions support HDR?');
+  await page.getByLabel('Brand name', { exact: true }).fill('Altex');
+  await page.getByLabel('Product page URL', { exact: true }).fill('https://altex.ro/');
+  await page.getByLabel(/Allowed redirect hostnames/).fill('https://altex.ro/');
+  await page.getByRole('button', { name: 'Review page with AI' }).click();
+  await expect(page.getByRole('alert')).toContainText('HTTP 403');
+  await page.getByRole('button', { name: 'Use browser page content' }).click();
+  await expect(page.getByRole('link', { name: 'Open the product page in your browser' })).toHaveAttribute('href', 'https://altex.ro/');
+  const pasted = 'Visible product details include a list of television models, display sizes and supported features.';
+  await page.getByLabel('Current product content').fill(pasted);
+  await page.getByRole('button', { name: 'Review page with AI' }).click();
+  await expect(page.getByRole('heading', { name: 'Add a product comparison' })).toBeVisible();
+  expect(requests[0]).toMatchObject({ fetch_page: true, redirect_hosts: ['https://altex.ro/'] });
+  expect(requests[1]).toMatchObject({ fetch_page: false, page_content: pasted, buyer_question: 'Which televisions support HDR?' });
+});
+
 test('mobile layout fits the viewport and navigation stays usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 280 });
   await page.goto('/');

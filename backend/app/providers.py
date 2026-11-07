@@ -160,14 +160,20 @@ def parse_extraction(text: str, request: AuditRequest) -> ExtractedAnswer:
     return extracted
 
 
-async def grounded_response(client, provider: Provider, instruction: str, schema: dict,
-                            request: AuditRequest) -> tuple[ExtractedAnswer, dict[str, str]]:
+async def search_response(client, provider: Provider, instruction: str, schema: dict,
+                          *, domain: str | None = None) -> tuple[dict, list[dict]]:
     key = key_for(provider)
     if not key:
         raise ValueError(f"No {provider} API key configured. Use explicit demo mode or configure credentials.")
     if provider == Provider.openai:
+        tool = {"type": "web_search"}
+        search_options = {}
+        if domain:
+            tool.update(filters={"allowed_domains": [domain]}, external_web_access=False)
+            search_options["include"] = ["web_search_call.action.sources"]
         data = await post_json(client, "https://api.openai.com/v1/responses", {"Authorization": f"Bearer {key}"},
-                               {"model": model_for(provider), "input": instruction, "tools": [{"type": "web_search"}], "tool_choice": "required"})
+                               {"model": model_for(provider), "input": instruction, "tools": [tool],
+                                "tool_choice": "required", **search_options})
         grounded = any(i.get("type") == "web_search_call" and i.get("status") == "completed" for i in data.get("output", []))
     else:
         data = await perplexity_response(client, key, instruction, schema, search=True)
@@ -175,21 +181,34 @@ async def grounded_response(client, provider: Provider, instruction: str, schema
     parts = output_parts(data)
     if not grounded:
         raise ValueError("Provider returned no verifiable web-grounding citations; result excluded")
-    extracted = parse_extraction("".join(p.get("text", "") for p in parts), request)
+    return data, parts
+
+
+def search_references(data: dict, parts: list[dict], cited_text: str, *, include_consulted=False) -> dict[str, str]:
     citations = {a["url"]: a["url"] for p in parts for a in p.get("annotations", [])
                  if a.get("type") == "url_citation" and a.get("url")}
-    if provider == Provider.perplexity:
-        # The Agent API can return numbered references in the message instead of annotations.
-        cited_ids = set(re.findall(r"\[\d+\]", extracted.answer))
-        citations.update({ref: source["url"] for item in data.get("output", []) if item.get("type") == "search_results"
-                          for source in item.get("results", []) if (ref := f"[{source.get('id')}]") in cited_ids and source.get("url")})
+    if include_consulted:
+        citations.update({source["url"]: source["url"] for item in data.get("output", [])
+                          if item.get("type") == "web_search_call" and item.get("status") == "completed"
+                          for source in ((item.get("action") or {}).get("sources") or []) if source.get("url")})
+    # The Perplexity Agent API can return numbered references instead of annotations.
+    cited_ids = set(re.findall(r"\[\d+\]", cited_text))
+    citations.update({ref: source["url"] for item in data.get("output", []) if item.get("type") == "search_results"
+                      for source in item.get("results", []) if (ref := f"[{source.get('id')}]") in cited_ids and source.get("url")})
     safe_citations = {}
     for ref, url in citations.items():
         try:
             safe_citations[ref] = public_url(url)
         except (TypeError, ValueError):
             continue
-    return extracted, safe_citations
+    return safe_citations
+
+
+async def grounded_response(client, provider: Provider, instruction: str, schema: dict,
+                            request: AuditRequest) -> tuple[ExtractedAnswer, dict[str, str]]:
+    data, parts = await search_response(client, provider, instruction, schema)
+    extracted = parse_extraction("".join(p.get("text", "") for p in parts), request)
+    return extracted, search_references(data, parts, extracted.answer)
 
 
 async def live_result(client, request: AuditRequest, index: int, provider: Provider) -> QueryResult:

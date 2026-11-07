@@ -12,6 +12,10 @@ from bs4 import BeautifulSoup
 from .models import public_url
 
 
+class PageAccessDenied(ValueError):
+    """The destination refused the automated page request."""
+
+
 def allowed_hosts() -> list[str]:
     """Read optional deployment-level restrictions for public page fetching."""
     return [h.strip().lower() for h in os.getenv("GEO_FETCH_HOSTS", "").split(",") if h.strip()]
@@ -89,6 +93,8 @@ async def fetch_page(url: str, redirect_hosts: list[str]) -> dict:
                             raise ValueError("Page returned a redirect without a destination")
                         url = urljoin(url, location)
                         continue
+                    if response.status_code in (401, 403):
+                        raise PageAccessDenied(f"The website refused the optimizer’s page request (HTTP {response.status_code}).")
                     if response.is_error:
                         raise ValueError(f"Page returned HTTP {response.status_code}")
                     if "text/html" not in response.headers.get("content-type", ""):

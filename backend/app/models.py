@@ -120,6 +120,10 @@ class OptimizationRequest(InputModel):
     @field_validator("redirect_hosts")
     @classmethod
     def public_redirect_hosts(cls, values):
-        if any(not value or len(value) > 253 or re.search(r"[/:@?#*\\\s]", value) for value in values):
-            raise ValueError("Enter exact public hostnames without schemes, ports, or paths")
-        return list(dict.fromkeys(urlsplit(public_url(f"https://{value}")).hostname for value in values))
+        hosts = []
+        for value in values:
+            match = re.fullmatch(r"(?:https://)?([^/:@?#*\\\s]{1,253})/?", value.strip(), re.I)
+            if not match:
+                raise ValueError("Enter a public hostname or an HTTPS site address without a port or path")
+            hosts.append(urlsplit(public_url(f"https://{match[1]}")).hostname)
+        return list(dict.fromkeys(hosts))

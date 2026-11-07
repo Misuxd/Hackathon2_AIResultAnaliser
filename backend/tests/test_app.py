@@ -16,7 +16,7 @@ from app.main import app
 from app.models import AuditRequest, OptimizationRequest, Provider, QueryResult, public_url
 from app.optimizer import optimize, rewrite_with_ai
 from app.providers import demo_result, live_result, parse_extraction, post_json, run_query
-from app.scraper import fetch_page, inspect_html, validate_fetch_url
+from app.scraper import PageAccessDenied, fetch_page, inspect_html, validate_fetch_url
 
 
 def request(**changes):
@@ -260,6 +260,15 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page["url"], "https://shop.example.com/product")
         self.assertEqual(page["headings"], ["Public product page"])
 
+    async def test_page_refusal_is_distinct_from_provider_failure(self):
+        create_client = httpx.AsyncClient
+        public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+        transport = httpx.MockTransport(lambda _: httpx.Response(403))
+        with patch.dict(os.environ, {"GEO_FETCH_HOSTS": ""}), patch("socket.getaddrinfo", return_value=public), \
+             patch("app.scraper.httpx.AsyncClient", side_effect=lambda **kw: create_client(transport=transport, **kw)):
+            with self.assertRaisesRegex(PageAccessDenied, "HTTP 403"):
+                await fetch_page("https://acme.com", [])
+
     async def test_source_export_has_parseable_safe_schema_and_matching_faq(self):
         content = '<main><h1>Acme CRM</h1><p>Acme provides pipeline management for B2B sales teams.</p><table><tr><td>Feature</td></tr></table></main>'
         result = await optimize(OptimizationRequest(brand="Acme", target_url="https://acme.com/product", page_content=content, mode="source"))
@@ -305,6 +314,38 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Acme billing", provider.call_args.args[-1]["input"])
         self.assertEqual(assets["target_url"], page["url"])
         self.assertEqual([item["title"] for item in assets["recommendations"]], ["Surface invoice reminders"])
+
+    async def test_blocked_optimizer_automatically_reviews_same_site_search_sources(self):
+        source = "https://www.altex.ro/televizoare/"
+        offsite = "https://altex.ro.example.org/televizoare/"
+        for provider in Provider:
+            with self.subTest(provider=provider):
+                item = {"title": "Explain HDR formats", "evidence": "The TV category lists models.",
+                        "citation": source if provider == Provider.openai else "[3]",
+                        "change": "Add HDR format labels to the TV comparison.", "why": "Answers the buyer question."}
+                text = json.dumps({"recommendations": [item, item | {"title": "Offsite", "citation": offsite},
+                                                        item | {"title": "Unverified", "citation": "https://altex.ro/unknown/"}]})
+                if provider == Provider.openai:
+                    search = {"type": "web_search_call", "status": "completed",
+                              "action": {"sources": [{"url": source}]}}
+                else:
+                    search = {"type": "search_results", "results": [{"id": 3, "url": source}]}
+                response = {"output": [search, {"type": "message", "content": [{"type": "output_text", "text": text,
+                            "annotations": [{"type": "url_citation", "url": offsite}]}]}]}
+                req = OptimizationRequest(brand="Altex", target_url="https://altex.ro/", fetch_page=True,
+                                          buyer_question="Which TVs support HDR?", provider=provider)
+                with patch("app.optimizer.fetch_page", new=AsyncMock(side_effect=PageAccessDenied("HTTP 403"))), \
+                     patch("app.providers.key_for", return_value="test-key"), \
+                     patch("app.providers.post_json", new=AsyncMock(return_value=response)) as search_call:
+                    assets = await optimize(req)
+                search_call.assert_awaited_once()
+                self.assertIn(req.buyer_question, search_call.call_args.args[-1]["input"])
+                if provider == Provider.openai:
+                    self.assertEqual(search_call.call_args.args[-1]["tools"][0]["filters"], {"allowed_domains": ["altex.ro"]})
+                self.assertEqual(assets["source_kind"], "web_search")
+                self.assertEqual(assets["checks"], [])
+                self.assertEqual(assets["json_ld_script"], "")
+                self.assertEqual([(r["title"], r["source_url"]) for r in assets["recommendations"]], [(item["title"], source)])
 
 
 class APITests(unittest.TestCase):
@@ -357,6 +398,26 @@ class APITests(unittest.TestCase):
         store.init()
         self.assertEqual(store.get(audit_id)["status"], "failed")
         self.assertEqual(store.events(audit_id, 0)[0]["kind"], "failed")
+
+    def test_optimizer_accepts_https_redirect_site_address_and_identifies_page_access_denial(self):
+        payload = {"brand": "Acme", "target_url": "https://acme.com/product", "fetch_page": True,
+                   "mode": "source", "redirect_hosts": ["https://shop.acme.com/", "SHOP.ACME.COM"]}
+        with patch("app.optimizer.fetch_page", new=AsyncMock(side_effect=PageAccessDenied("Page refused access (HTTP 403)."))) as fetch:
+            response = self.client.post("/api/v1/optimize", json=payload)
+        fetch.assert_awaited_once_with(payload["target_url"], ["shop.acme.com"])
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"]["code"], "page_access_denied")
+        for invalid in ("http://shop.acme.com/", "https://shop.acme.com:443/", "https://shop.acme.com/path", "https://127.0.0.1/"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                OptimizationRequest.model_validate(payload | {"redirect_hosts": [invalid]})
+
+    def test_optimizer_preserves_browser_copy_option_when_search_has_no_usable_sources(self):
+        payload = {"brand": "Altex", "target_url": "https://altex.ro/", "fetch_page": True, "mode": "ai"}
+        with patch("app.optimizer.fetch_page", new=AsyncMock(side_effect=PageAccessDenied("HTTP 403"))), \
+             patch("app.optimizer.review_search_results", new=AsyncMock(side_effect=ValueError("No usable sources."))):
+            response = self.client.post("/api/v1/optimize", json=payload)
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], {"code": "page_access_denied", "message": "HTTP 403 No usable sources."})
 
     def test_previous_visibility_requires_matching_questions_and_models(self):
         req = request(providers=["openai"])

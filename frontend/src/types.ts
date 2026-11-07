@@ -48,7 +48,8 @@ export type Summary = {
 export type Audit = { id: string; created: number; request: AuditRequest; status: string; results: QueryResult[]; summary: Summary | null };
 export type Health = { status: string; providers: { id: Provider; configured: boolean; model: string }[]; fetch_hosts: string[]; deployment: string };
 export type Assets = {
-  recommendations: { title: string; evidence: string; change: string; why: string }[];
+  recommendations: { title: string; evidence: string; change: string; why: string; source_url?: string }[];
+  source_kind?: 'web_search';
   mode: string; provider: string | null; target_url: string; source_characters: number;
   checks: { label: string; present: boolean }[];
   optimized_markdown: string; json_ld_script: string; llms_txt: string; warnings: string[];
@@ -74,10 +75,15 @@ export function citesSite(result: QueryResult, site: string) {
     return source === target || source.endsWith(`.${target}`);
   });
 }
+export class ApiError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+}
+
 export async function api<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch('/api/v1' + url, options);
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
+    if (typeof data.detail?.message === 'string') throw new ApiError(data.detail.message, data.detail.code);
     throw new Error(typeof data.detail === 'string' ? data.detail : Array.isArray(data.detail)
       ? data.detail.map((e: { msg: string }) => e.msg).join('. ') : `Request failed (${response.status})`);
   }

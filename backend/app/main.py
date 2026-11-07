@@ -15,7 +15,7 @@ from .evaluator import historical_visibility, host_of, observed_visibility, summ
 from .models import AuditRequest, OptimizationRequest, QueryResult
 from .optimizer import optimize
 from .providers import ProviderAccessError, key_for, model_for, provider_status, run_query
-from .scraper import allowed_hosts
+from .scraper import PageAccessDenied, allowed_hosts
 
 load_dotenv()
 
@@ -180,6 +180,8 @@ async def optimize_page(request: OptimizationRequest):
     app.state.optimizing = True
     try:
         return await optimize(request)
+    except PageAccessDenied as exc:
+        raise HTTPException(422, {"code": "page_access_denied", "message": str(exc)}) from exc
     except ProviderAccessError as exc:
         raise HTTPException(502, str(exc)) from exc
     except ValueError as exc:
