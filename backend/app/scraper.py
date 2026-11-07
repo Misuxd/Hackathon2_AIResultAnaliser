@@ -13,6 +13,7 @@ from .models import public_url
 
 
 def allowed_hosts() -> list[str]:
+    """Read the optimizer's exact hostname allowlist. An empty list blocks all page fetches."""
     return [h.strip().lower() for h in os.getenv("GEO_FETCH_HOSTS", "").split(",") if h.strip()]
 
 
@@ -66,6 +67,7 @@ async def fetch_page(url: str) -> dict:
     async with asyncio.timeout(25):
         async with httpx.AsyncClient(timeout=15, follow_redirects=False, headers={"User-Agent": "AIResultsAssistant/0.1 (page audit)"}) as client:
             for _ in range(4):
+                # Recheck the allowlist and public IP addresses before following any redirect.
                 url = await validate_fetch_url(url)
                 async with client.stream("GET", url) as response:
                     if response.is_redirect:
