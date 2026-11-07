@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class Provider(StrEnum):
     openai = "openai"
     perplexity = "perplexity"
-    gemini = "gemini"
 
 
 class InputModel(BaseModel):
@@ -41,16 +40,14 @@ def public_url(value: str) -> str:
 class AuditRequest(InputModel):
     brand: str = Field(min_length=2, max_length=80)
     target_url: str = Field(max_length=2048)
-    competitors: list[str] = Field(default_factory=list, max_length=8)
+    offering: str = Field(default="", max_length=120)
     prompts: list[str] = Field(min_length=1, max_length=10)
     mode: str = Field(default="live", pattern="^(demo|live)$")
-    providers: list[Provider] = Field(default_factory=lambda: list(Provider), min_length=1, max_length=3)
-    monthly_organic_revenue: float | None = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
-    displacement_assumption: float = Field(default=0.2, ge=0, le=1, allow_inf_nan=False)
+    providers: list[Provider] = Field(default_factory=lambda: list(Provider), min_length=1, max_length=2)
 
     _url = field_validator("target_url")(public_url)
 
-    @field_validator("competitors", "prompts")
+    @field_validator("prompts")
     @classmethod
     def clean_list(cls, values: list[str]) -> list[str]:
         values = [v.strip() for v in values]
@@ -61,9 +58,7 @@ class AuditRequest(InputModel):
         return values
 
     @model_validator(mode="after")
-    def distinct_brand(self):
-        if self.brand.casefold() in {v.casefold() for v in self.competitors}:
-            raise ValueError("The client brand cannot also be a competitor")
+    def distinct_providers(self):
         if len(set(self.providers)) != len(self.providers):
             raise ValueError("Select each provider only once")
         return self
@@ -81,6 +76,7 @@ class ExtractedAnswer(InputModel):
     answer: str = Field(min_length=1, max_length=40000)
     mentions: list[BrandMention] = Field(max_length=30)
     structural_winner_patterns: list[str] = Field(default_factory=list, max_length=10)
+    generic_buyer_question: bool | None = None
 
 
 class QueryResult(BaseModel):
@@ -93,14 +89,17 @@ class QueryResult(BaseModel):
     mentions: list[BrandMention] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
     structural_winner_patterns: list[str] = Field(default_factory=list)
+    generic_buyer_question: bool | None = None
     error: str | None = None
+    access_error: bool = False
+    skipped: bool = False
 
 
 class OptimizationRequest(InputModel):
     brand: str = Field(min_length=2, max_length=80)
     target_url: str = Field(max_length=2048)
     page_content: str = Field(default="", max_length=100000)
-    competitor_urls: list[str] = Field(default_factory=list, max_length=3)
+    redirect_hosts: list[str] = Field(default_factory=list, max_length=5)
     fetch_page: bool = False
     mode: str = Field(default="ai", pattern="^(ai|source)$")
     provider: Provider = Provider.openai
@@ -108,7 +107,9 @@ class OptimizationRequest(InputModel):
 
     _url = field_validator("target_url")(public_url)
 
-    @field_validator("competitor_urls")
+    @field_validator("redirect_hosts")
     @classmethod
-    def competitor_urls_valid(cls, values):
-        return [public_url(v) for v in values]
+    def public_redirect_hosts(cls, values):
+        if any(not value or len(value) > 253 or re.search(r"[/:@?#*\\\s]", value) for value in values):
+            raise ValueError("Enter exact public hostnames without schemes, ports, or paths")
+        return list(dict.fromkeys(urlsplit(public_url(f"https://{value}")).hostname for value in values))

@@ -13,7 +13,7 @@ from . import store
 from .evaluator import summarize
 from .models import AuditRequest, OptimizationRequest
 from .optimizer import optimize
-from .providers import key_for, provider_status, run_query
+from .providers import ProviderAccessError, key_for, provider_status, run_query
 from .scraper import allowed_hosts
 
 load_dotenv()
@@ -23,7 +23,7 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     store.init()
     app.state.tasks = set()
-    app.state.query_limit = asyncio.Semaphore(10)
+    app.state.query_limit = asyncio.Semaphore(4)
     app.state.optimizing = False
     async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
         app.state.client = client
@@ -49,8 +49,11 @@ async def history():
 
 
 async def run_audit(audit_id, request):
-    children = [asyncio.create_task(run_query(app.state.client, app.state.query_limit, request, index, provider))
-                for index in range(len(request.prompts)) for provider in request.providers]
+    client, limit = app.state.client, app.state.query_limit
+    first = {provider: asyncio.create_task(run_query(client, limit, request, 0, provider)) for provider in request.providers}
+    children = [*first.values(), *(asyncio.create_task(run_query(client, limit, request, index, provider,
+                                                               first[provider] if request.mode == "live" else None))
+                                  for index in range(1, len(request.prompts)) for provider in request.providers)]
     try:
         results = []
         for completed in asyncio.as_completed(children):
@@ -133,6 +136,8 @@ async def optimize_page(request: OptimizationRequest):
     app.state.optimizing = True
     try:
         return await optimize(request)
+    except ProviderAccessError as exc:
+        raise HTTPException(502, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc) if type(exc) is ValueError else "Provider returned an invalid rewrite. Retry or use source-only export.")
     except (httpx.HTTPError, OSError, TimeoutError, KeyError, IndexError, TypeError):

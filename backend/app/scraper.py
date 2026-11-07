@@ -13,15 +13,18 @@ from .models import public_url
 
 
 def allowed_hosts() -> list[str]:
-    """Read the optimizer's exact hostname allowlist. An empty list blocks all page fetches."""
+    """Read optional deployment-level restrictions for public page fetching."""
     return [h.strip().lower() for h in os.getenv("GEO_FETCH_HOSTS", "").split(",") if h.strip()]
 
 
-async def validate_fetch_url(url: str):
+async def validate_fetch_url(url: str, hosts: set[str]) -> tuple[str, str]:
     url = public_url(url)
     host = urlsplit(url).hostname
-    if host not in allowed_hosts():
-        raise ValueError(f"Page fetching is not enabled for {host}. Add its exact hostname to GEO_FETCH_HOSTS or paste page content.")
+    restricted = allowed_hosts()
+    if restricted and host not in restricted:
+        raise ValueError(f"The server restricts fetching for {host}. Add the hostname to GEO_FETCH_HOSTS or paste page content.")
+    if host not in hosts:
+        raise ValueError(f"The page redirects to {host}. Add that hostname under Allowed redirect hostnames to continue.")
     try:
         resolved = await asyncio.to_thread(socket.getaddrinfo, host, 443, 0, socket.SOCK_STREAM)
         addresses = [row[4][0] for row in resolved]
@@ -38,9 +41,10 @@ async def validate_fetch_url(url: str):
                 if data.get("Status") != 0:
                     raise ValueError("The page hostname could not be resolved")
                 addresses.extend(answer["data"] for answer in data.get("Answer", []) if answer.get("type") in (1, 28))
-    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+    ips = [ipaddress.ip_address(address) for address in addresses]
+    if not ips or any(not ip.is_global or ip.is_multicast for ip in ips):
         raise ValueError("Page resolves to a non-public address; fetching blocked")
-    return url
+    return url, str(min(ips, key=lambda ip: ip.version))
 
 
 def inspect_html(html: str) -> dict:
@@ -63,13 +67,22 @@ def inspect_html(html: str) -> dict:
             "json_ld": schemas[:20]}
 
 
-async def fetch_page(url: str) -> dict:
+async def fetch_page(url: str, redirect_hosts: list[str]) -> dict:
+    host = urlsplit(public_url(url)).hostname
+    hosts = {host, *redirect_hosts}
+    if host:
+        hosts.add(host.removeprefix("www.") if host.startswith("www.") else "www." + host)
     async with asyncio.timeout(25):
-        async with httpx.AsyncClient(timeout=15, follow_redirects=False, headers={"User-Agent": "AIResultsAssistant/0.1 (page audit)"}) as client:
+        # Connect to the validated IP, while checking TLS against the original host.
+        # Disable connection reuse so redirects to another hostname always get a fresh TLS check.
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False,
+                                     limits=httpx.Limits(max_keepalive_connections=0),
+                                     headers={"User-Agent": "AIResultsAssistant/0.1 (page audit)"}) as client:
             for _ in range(4):
-                # Recheck the allowlist and public IP addresses before following any redirect.
-                url = await validate_fetch_url(url)
-                async with client.stream("GET", url) as response:
+                url, address = await validate_fetch_url(url, hosts)
+                target = httpx.URL(url)
+                async with client.stream("GET", target.copy_with(host=address), headers={"Host": target.host},
+                                         extensions={"sni_hostname": target.host}) as response:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location:
