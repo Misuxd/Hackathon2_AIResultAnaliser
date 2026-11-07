@@ -103,7 +103,8 @@ export default function AuditLauncher({ form, setForm, health, audit, launch, bu
         <strong>{percentage == null ? '—' : `${percentage}%`}</strong>
       </div>
       <div><span className="eyebrow">{audit.request.mode === 'demo' ? 'DEMO RESULT' : 'AUDIT RESULT'}</span><h2 id="audit-result-title">AI Visibility Score</h2>
-        <p>{percentage == null ? 'No observed visibility score is available.' : 'Observed website visibility across unique unbranded questions in this site’s audit history.'}</p>
+        <p>Product category · {audit.summary.history_visibility?.product_category ?? (audit.request.offering || 'Uncategorized')}</p>
+        <p>{percentage == null ? 'No observed visibility score is available.' : 'Observed website visibility across unique unbranded questions for this site and product category.'}</p>
         {visibility && <><ScoreStats score={visibility} /><ProviderScores score={visibility} /></>}
         <p><strong>{audit.summary.successful_queries} of {audit.summary.total_queries}</strong> planned queries returned successful answers.</p>
         {audit.summary.failed_queries > 0 && <p>{audit.summary.failed_queries} queries failed or were skipped. Open the Citation Matrix for details.</p>}

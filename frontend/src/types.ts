@@ -21,13 +21,19 @@ export type VisibilityStats = {
   providers: { provider: Provider; model: string | null; percentage: number | null;
     valid_answers: number; planned_answers: number; cited_answers: number }[];
 };
+export type RelevantSite = { domain: string; url: string; relevance_score: number; response_count: number; visibility_pct?: number };
+type QuestionAttempt = { provider: Provider; prompt: string; audit_created: number; skipped: boolean; model?: string | null;
+  classification: 'website_cited' | 'brand_only' | 'neither' | 'api_failure' };
 export type VisibilityReport = {
   categories: Record<VisibilityCategory, VisibilityStats>;
   questions: { id: string; category: VisibilityCategory; prompt?: string; prompt_indices: number[]; valid_answers: number; cited_answers: number;
+    attempts?: QuestionAttempt[];
     answers: { query_id: string; prompt_index: number; provider: Provider; counted: boolean; brand_mentioned: boolean;
       prompt?: string; excerpt?: string; error?: string | null; skipped?: boolean; audit_created?: number;
       classification: 'website_cited' | 'brand_only' | 'neither' | 'api_failure'; website_citations: string[]; competitors: string[] }[] }[];
-  previous?: { created: number; percentage: number; change_pp: number; valid_answers: number; planned_answers: number };
+  previous?: { created: number; percentage: number; change_pp: number; valid_answers: number; planned_answers: number } | null;
+  product_category?: string;
+  relevant_sites?: RelevantSite[];
 };
 export type Summary = {
   visibility_pct: number | null; weighted_som_pct: number | null; mentioned_responses: number;
@@ -35,7 +41,7 @@ export type Summary = {
   ranked_queries?: number;
   brand_leaderboard: { brand: string; rank_points: number; mentions: number; weighted_som_pct: number | null }[];
   engine_breakdown: { provider: Provider; successful: number; mentioned: number; visibility_pct: number | null }[];
-  relevant_sites?: { domain: string; url: string; relevance_score: number; response_count: number }[];
+  relevant_sites?: RelevantSite[];
   observed_visibility?: VisibilityReport;
   history_visibility?: VisibilityReport;
 };

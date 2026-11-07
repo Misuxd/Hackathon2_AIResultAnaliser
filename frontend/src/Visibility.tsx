@@ -30,16 +30,17 @@ export function VisibilityReport({ audit }: { audit: Audit }) {
   const report = history ?? audit.summary?.observed_visibility;
   if (!report) return <section className="panel overview-sample"><h2>AI Visibility Score</h2><p>Run a new audit to measure observed website visibility.</p></section>;
   const score = report.categories.discovery;
-  const previous = audit.summary?.observed_visibility?.previous;
+  const previous = history ? history.previous : audit.summary?.observed_visibility?.previous;
   const results = new Map(audit.results.map(result => [result.query_id, result]));
   const questions = report.questions.filter(question => filter === 'all' || question.answers.some(answer =>
     filter === 'competitors' ? answer.competitors.length > 0 : answer.classification === filter));
   return <section className="panel overview-sample visibility-report" aria-labelledby="observed-visibility-heading">
     <span className="eyebrow">OBSERVED WEBSITE VISIBILITY</span>
     <h2 id="observed-visibility-heading">AI Visibility Score</h2>
+    <p className="fine-print">Product category · {history?.product_category ?? (audit.request.offering || 'Uncategorized')}</p>
     <strong className="metric">{percent(score.percentage)}</strong>
     <p>{score.percentage == null ? 'No valid answers to unbranded discovery questions.' : history
-      ? 'Average website citation rate across unique unbranded questions in this site’s audit history. Each provider contributes its latest valid answer per question.'
+      ? 'Average website citation rate across unique unbranded questions for this site and product category. Each provider contributes its latest valid answer per question.'
       : 'Average website citation rate across answered unbranded questions. Each distinct question has equal weight.'}</p>
     <ScoreStats score={score} />
     {previous ? <p>This audit’s question set scored <strong>{previous.change_pp > 0 ? '+' : ''}{previous.change_pp} percentage points</strong> compared with {new Date(previous.created * 1000).toLocaleDateString()} ({percent(previous.percentage)} visibility, {previous.valid_answers}/{previous.planned_answers} valid answers).</p>
@@ -73,6 +74,13 @@ export function VisibilityReport({ audit }: { audit: Audit }) {
             <a key={url} href={url} target="_blank" rel="noreferrer">{url}</a>)}</div>}
         </article>;
       })}
+      {!!question.attempts?.length && <details className="data-details">
+        <summary>Question history · {question.attempts.length} attempts</summary>
+        <ul className="provider-scores">{question.attempts.map((attempt, index) => <li key={index}>
+          {new Date(attempt.audit_created * 1000).toLocaleString()} · {providerName(attempt.provider)}{attempt.model && ` (${attempt.model})`} · {attempt.skipped ? 'Not run' : outcomes[attempt.classification]}
+          {attempt.prompt !== question.prompt && <p>{attempt.prompt}</p>}
+        </li>)}</ul>
+      </details>}
     </details>)}
     {!questions.length && <p className="fine-print">No matching questions.</p>}
   </section>;

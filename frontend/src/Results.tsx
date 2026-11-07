@@ -22,7 +22,8 @@ export function Overview({ audit, launch, diagnose }: { audit: Audit | null; lau
   const s = audit.summary;
   if (!s) return <section className="panel empty-state"><ScanSearch size={35} className="pulse" /><h2>{audit.status === 'failed' ? 'Audit interrupted' : 'Listening to the engines'}</h2><p>{audit.results.length} responses received. {audit.status === 'failed' ? 'Start a new audit to try again.' : 'The overview will appear when all queries finish.'}</p><button className="secondary" onClick={launch}>View query radar <ArrowRight size={16} /></button></section>;
   const successful = audit.results.filter(r => r.status === 'success');
-  const sites = s.relevant_sites ?? [];
+  const categorySites = s.history_visibility?.relevant_sites;
+  const sites = categorySites ?? s.relevant_sites ?? [];
   const rankedQueries = s.ranked_queries ?? successful.filter(r => r.mentions.some(m => m.rank_position != null)).length;
   const leaderboard = s.brand_leaderboard ?? [];
   const rankedBrands = leaderboard.filter(brand => brand.rank_points > 0);
@@ -52,11 +53,13 @@ export function Overview({ audit, launch, diagnose }: { audit: Audit | null; lau
       <section className="panel chart-panel"><div className="section-line"><div><h2>Brand awareness by engine</h2><p>How often your brand appears across all questions</p></div></div>
         <div className="engine-breakdown">{ENGINES.map(e => { const row = s.engine_breakdown?.find(r => r.provider === e.id); return <div key={e.id}><div className="engine-bar-heading"><span><span className="engine-symbol">{e.mark}</span>{e.name}</span><strong className="mono">{percent(row?.visibility_pct)}</strong></div><div className="bar-track"><span style={{ width: `${row?.visibility_pct || 0}%` }} /></div><small>{row?.mentioned || 0} mentions · {row?.successful || 0} successful answers</small></div>; })}</div>
       </section></div>
-    <section className="panel authority"><div className="section-line"><div><h2>Relevant cited websites</h2><p>Direct offers score 100% and related offers score 50%. Sites with the same score are ordered by the number of answers citing a matching page.</p></div><span className="pill">{sites.length} domains</span></div>
+    <section className="panel authority"><div className="section-line"><div><h2>Relevant cited websites</h2><p>{categorySites
+      ? `Other websites cited for ${s.history_visibility?.product_category ?? 'this category'}. AI visibility averages how often responding providers cited a matching page for each answered discovery question.`
+      : 'Direct offers score 100% and related offers score 50%. Sites with the same score are ordered by the number of answers citing a matching page.'}</p></div><span className="pill">{sites.length} domains</span></div>
       {sites.length ? <><ol className="site-chart" aria-label="Cited websites by relevance">{sites.slice(0, 8).map(site => <li key={site.domain}>
-        <div className="engine-bar-heading"><strong>{site.domain}</strong><span>{site.relevance_score === 100 ? 'Direct match' : 'Related offer'}</span></div>
+        <div className="engine-bar-heading"><strong>{site.domain}</strong><span>{site.relevance_score === 100 ? 'Direct match' : 'Related offer'}{categorySites && ` · AI visibility ${percent(site.visibility_pct)}`}</span></div>
         <div className="bar-track" aria-hidden="true"><span style={{ width: `${site.relevance_score}%` }} /></div>
-      </li>)}</ol><details className="data-details"><summary>View all relevant website data</summary><table><thead><tr><th>Domain</th><th>Answers</th><th>Relevance weight</th></tr></thead><tbody>{sites.map(site => <tr key={site.domain}><td><a href={site.url} target="_blank" rel="noreferrer">{site.domain} <ExternalLink size={12} /></a></td><td>{site.response_count}</td><td>{percent(site.relevance_score)}</td></tr>)}</tbody></table></details></> : <p className="overview-empty">{s.relevant_sites ? 'No relevant cited websites in the successful answers.' : 'Run a new audit to assess website relevance for this offering.'}</p>}
+      </li>)}</ol><details className="data-details"><summary>View all relevant website data</summary><table><thead><tr><th>Domain</th><th>Answers</th><th>Relevance weight</th>{categorySites && <th>AI visibility</th>}</tr></thead><tbody>{sites.map(site => <tr key={site.domain}><td><a href={site.url} target="_blank" rel="noreferrer">{site.domain} <ExternalLink size={12} /></a></td><td>{site.response_count}</td><td>{percent(site.relevance_score)}</td>{categorySites && <td>{percent(site.visibility_pct)}</td>}</tr>)}</tbody></table></details></> : <p className="overview-empty">{categorySites ? 'No other relevant cited websites for this category.' : s.relevant_sites ? 'No relevant cited websites in the successful answers.' : 'Run a new audit to assess website relevance for this offering.'}</p>}
     </section>
     <div className="methodology"><MessageSquare size={16} /><p>Weighted share divides the brand’s rank points by the total across all ranked brands. A first place earns 3 points, second earns 2, third earns 1, and fourth or lower earns 0.5. Mentions without a verified rank earn zero.</p></div>
   </>;

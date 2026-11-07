@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from . import store
-from .evaluator import historical_visibility, observed_visibility, summarize
+from .evaluator import historical_visibility, host_of, observed_visibility, summarize
 from .models import AuditRequest, OptimizationRequest, QueryResult
 from .optimizer import optimize
 from .providers import ProviderAccessError, key_for, model_for, provider_status, run_query
@@ -102,17 +102,24 @@ def add_history_score(audit):
     if audit["status"] != "complete" or not audit["summary"]:
         return
     snapshots = []
-    for entry in (audit, *store.earlier_audits(audit)):
+    for entry in store.category_audits(audit):
         try:
             request = AuditRequest.model_validate({k: v for k, v in entry["request"].items() if k != "provider_models"})
             results = [QueryResult.model_validate(result) for result in entry["results"]]
         except ValidationError:
+            if entry["id"] == audit["id"]:
+                return
             continue  # Historical audits can contain retired providers.
-        if entry is audit and "observed_visibility" not in audit["summary"]:
-            audit["summary"]["observed_visibility"] = observed_visibility(request, results)
-        snapshots.append((request.model_copy(update={"brand": audit["request"]["brand"]}), results, entry["created"]))
+        request = request.model_copy(update={"prompts": entry["request"]["prompts"]})
+        if entry["id"] == audit["id"] and "observed_visibility" not in audit["summary"]:
+            audit["summary"]["observed_visibility"] = observed_visibility(request, results, intent_ids=entry["intent_ids"])
+        snapshots.append((request.model_copy(update={"brand": audit["request"]["brand"]}), results, entry["created"],
+                          entry["request"].get("provider_models"), entry["intent_ids"]))
     if snapshots:
-        audit["summary"]["history_visibility"] = historical_visibility(snapshots)
+        request = audit["request"]
+        audit["summary"]["history_visibility"] = historical_visibility(snapshots, host_of(request["target_url"])) | {
+            "product_category": request.get("offering") or "Uncategorized",
+        }
 
 
 @app.get("/api/v1/audits/{audit_id}")

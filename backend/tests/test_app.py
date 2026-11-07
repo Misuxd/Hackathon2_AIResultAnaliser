@@ -378,6 +378,50 @@ class APITests(unittest.TestCase):
         prior_report = self.client.get(f"/api/v1/audits/{prior}").json()["summary"]["history_visibility"]
         self.assertEqual(prior_report["categories"]["discovery"]["distinct_questions"], 2)
 
+    def test_category_scopes_history_and_weights_other_sites_by_question(self):
+        retailer = "https://retailer.example/laptops"
+        incidental = "https://anpc.ro/rights"
+
+        def save(offering, prompt, cite_retailer):
+            req = request(offering=offering, prompts=[prompt])
+            results = [QueryResult(query_id=f"0:{provider}", prompt_index=0, provider=provider, mode="demo",
+                                   status="success", answer="See these choices.",
+                                   citations=[retailer, incidental, req.target_url] if cite_retailer and provider == Provider.openai else [],
+                                   citation_weights={retailer: 100, req.target_url: 100}) for provider in req.providers]
+            audit_id = store.create(req.model_dump())
+            for result in results:
+                store.append(audit_id, "result", result.model_dump())
+            store.finish(audit_id, summarize(req, results))
+            return audit_id
+
+        save("Laptops", "Best laptops?", True)
+        save("Appliances", "Where can I buy a dishwasher?", True)
+        latest = save("LAPTOPS", "What laptops work offline?", False)
+        report = self.client.get(f"/api/v1/audits/{latest}").json()["summary"]["history_visibility"]
+        self.assertEqual(report["product_category"], "LAPTOPS")
+        self.assertEqual(report["categories"]["discovery"]["distinct_questions"], 2)
+        self.assertEqual(report["categories"]["discovery"]["percentage"], 25)
+        self.assertEqual(report["relevant_sites"], [{"domain": "retailer.example", "url": retailer,
+                                                     "response_count": 1, "relevance_score": 100, "visibility_pct": 25}])
+
+    def test_question_history_migration_backfills_saved_attempts_once(self):
+        req = request(offering="Laptop   Computers", providers=["openai"])
+        result = demo_result(req, 0, Provider.openai)
+        audit_id = store.create(req.model_dump() | {"provider_models": {"openai": "synthetic"}})
+        store.append(audit_id, "result", result.model_dump())
+        store.finish(audit_id, summarize(req, [result]))
+        with store.connection() as db:
+            db.execute("DROP TABLE question_attempts")
+            db.execute("DROP TABLE audit_questions")
+            db.execute("PRAGMA user_version = 0")
+        store.init()
+        store.init()
+        with store.connection() as db:
+            self.assertEqual(db.execute("SELECT product_category FROM audit_questions").fetchone()[0], "laptop computers")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM question_attempts").fetchone()[0], 1)
+        report = self.client.get(f"/api/v1/audits/{audit_id}").json()["summary"]["history_visibility"]
+        self.assertEqual(report["questions"][0]["attempts"][0]["model"], "synthetic")
+
     def test_delete_history_removes_audits_and_events_and_protects_running_work(self):
         completed = store.create(request().model_dump())
         store.finish(completed, {"successful_queries": 0})
@@ -390,6 +434,9 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/v1/audits/{completed}").status_code, 404)
         self.assertEqual(store.events(completed, 0), [])
         self.assertEqual(store.events(running, 0), [])
+        with store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM audit_questions").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM question_attempts").fetchone()[0], 0)
 
     def test_saved_results_from_retired_engine_remain_readable(self):
         payload = request().model_dump() | {"providers": ["gemini"]}

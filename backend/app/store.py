@@ -6,7 +6,7 @@ import time
 import uuid
 from contextlib import closing, contextmanager
 
-from .evaluator import host_of
+from .evaluator import category_key, host_of, question_id
 
 
 @contextmanager
@@ -15,13 +15,15 @@ def connection():
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with closing(sqlite3.connect(path, timeout=10)) as db, db:
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys = ON")
         yield db
 
 
 def init():
     with connection() as db:
+        db.execute("PRAGMA journal_mode=WAL")
         db.executescript("""
-            PRAGMA journal_mode=WAL;
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS audits (
                 id TEXT PRIMARY KEY, created REAL NOT NULL, request TEXT NOT NULL,
                 status TEXT NOT NULL, summary TEXT
@@ -30,7 +32,28 @@ def init():
                 audit_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL,
                 data TEXT NOT NULL, PRIMARY KEY(audit_id, seq)
             );
+            CREATE TABLE IF NOT EXISTS audit_questions (
+                audit_id TEXT NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+                prompt_index INTEGER NOT NULL, intent_id TEXT NOT NULL, prompt TEXT NOT NULL,
+                site TEXT NOT NULL, product_category TEXT NOT NULL, mode TEXT NOT NULL,
+                PRIMARY KEY(audit_id, prompt_index)
+            );
+            CREATE INDEX IF NOT EXISTS audit_questions_scope
+                ON audit_questions(site, product_category, mode, audit_id);
+            CREATE TABLE IF NOT EXISTS question_attempts (
+                audit_id TEXT NOT NULL, event_seq INTEGER NOT NULL, prompt_index INTEGER NOT NULL,
+                provider TEXT NOT NULL, status TEXT NOT NULL,
+                PRIMARY KEY(audit_id, event_seq),
+                FOREIGN KEY(audit_id, prompt_index) REFERENCES audit_questions(audit_id, prompt_index) ON DELETE CASCADE,
+                FOREIGN KEY(audit_id, event_seq) REFERENCES events(audit_id, seq) ON DELETE CASCADE
+            );
         """)
+        if db.execute("PRAGMA user_version").fetchone()[0] == 0:
+            for row in db.execute("SELECT id, request FROM audits"):
+                _record_questions(db, row["id"], json.loads(row["request"]))
+            for row in db.execute("SELECT audit_id, seq, data FROM events WHERE kind = 'result'"):
+                _record_attempt(db, row["audit_id"], row["seq"], json.loads(row["data"]))
+            db.execute("PRAGMA user_version = 1")
         interrupted = db.execute("SELECT id FROM audits WHERE status = 'running'").fetchall()
         for row in interrupted:
             _append(db, row["id"], "failed", {"error": "Server restarted. Start a new audit."})
@@ -42,12 +65,30 @@ def create(request: dict) -> str:
     with connection() as db:
         db.execute("INSERT INTO audits VALUES (?, ?, ?, 'running', NULL)",
                    (audit_id, time.time(), json.dumps(request)))
+        _record_questions(db, audit_id, request)
     return audit_id
+
+
+def _record_questions(db, audit_id, request):
+    scope = (host_of(request["target_url"]), category_key(request.get("offering", "")), request["mode"])
+    db.executemany("INSERT INTO audit_questions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   ((audit_id, i, question_id(prompt), prompt, *scope) for i, prompt in enumerate(request["prompts"])))
+
+
+def _record_attempt(db, audit_id, seq, data):
+    # Early event payloads without question metadata stay readable in the original event log.
+    if data.get("provider") and data.get("status"):
+        db.execute("""
+            INSERT INTO question_attempts
+            SELECT audit_id, ?, prompt_index, ?, ? FROM audit_questions WHERE audit_id = ? AND prompt_index = ?
+        """, (seq, data["provider"], data["status"], audit_id, data.get("prompt_index")))
 
 
 def _append(db, audit_id, kind, data):
     seq = db.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE audit_id = ?", (audit_id,)).fetchone()[0]
     db.execute("INSERT INTO events VALUES (?, ?, ?, ?)", (audit_id, seq, kind, json.dumps(data)))
+    if kind == "result":
+        _record_attempt(db, audit_id, seq, data)
 
 
 def append(audit_id: str, kind: str, data: dict):
@@ -82,9 +123,22 @@ def fail(audit_id: str, error: str):
         _append(db, audit_id, "failed", {"error": error})
 
 
-def _read_audit(db, row):
-    results = db.execute("SELECT data FROM events WHERE audit_id = ? AND kind = 'result' ORDER BY seq", (row["id"],)).fetchall()
-    return {"id": row["id"], "created": row["created"], "request": json.loads(row["request"]),
+def _read_audit(db, row, question_history=False):
+    request = json.loads(row["request"])
+    indexed = {}
+    if question_history:
+        questions = db.execute("SELECT intent_id, prompt FROM audit_questions WHERE audit_id = ? ORDER BY prompt_index",
+                               (row["id"],)).fetchall()
+        request["prompts"] = [q["prompt"] for q in questions]
+        indexed["intent_ids"] = [q["intent_id"] for q in questions]
+        results = db.execute("""
+            SELECT e.data FROM question_attempts AS a JOIN events AS e
+              ON e.audit_id = a.audit_id AND e.seq = a.event_seq
+            WHERE a.audit_id = ? ORDER BY a.event_seq
+        """, (row["id"],)).fetchall()
+    else:
+        results = db.execute("SELECT data FROM events WHERE audit_id = ? AND kind = 'result' ORDER BY seq", (row["id"],)).fetchall()
+    return {"id": row["id"], "created": row["created"], "request": request, **indexed,
             "status": row["status"], "summary": json.loads(row["summary"]) if row["summary"] else None,
             "results": [json.loads(r["data"]) for r in results]}
 
@@ -95,16 +149,19 @@ def get(audit_id: str):
         return _read_audit(db, row) if row else None
 
 
-def earlier_audits(audit):
-    target = host_of(audit["request"]["target_url"])
+def category_audits(audit):
+    request = audit["request"]
     with connection() as db:
         db.execute("BEGIN")
         rows = db.execute("""
-            SELECT * FROM audits WHERE status = 'complete' AND created < ?
-              AND json_extract(request, '$.mode') = ? ORDER BY created DESC
-        """, (audit["created"], audit["request"]["mode"]))
-        return [_read_audit(db, row) for row in rows
-                if host_of(json.loads(row["request"])["target_url"]) == target]
+            SELECT a.* FROM audits AS a JOIN (
+                SELECT DISTINCT audit_id FROM audit_questions WHERE site = ? AND product_category = ? AND mode = ?
+            ) AS q ON q.audit_id = a.id
+            WHERE a.status = 'complete' AND (a.created < ? OR a.id = ?)
+            ORDER BY (a.id = ?) DESC, a.created DESC
+        """, (host_of(request["target_url"]), category_key(request.get("offering", "")), request["mode"],
+              audit["created"], audit["id"], audit["id"]))
+        return [_read_audit(db, row, question_history=True) for row in rows]
 
 
 def delete_history():

@@ -36,14 +36,32 @@ def intent_key(question: str) -> str:
     return " ".join(text.split()) or question.casefold()
 
 
-def observed_visibility(request: AuditRequest, results: list[QueryResult], models: dict | None = None) -> dict:
+def question_id(prompt: str) -> str:
+    return sha256(intent_key(prompt).encode()).hexdigest()[:16]
+
+
+def category_key(offering: str) -> str:
+    return " ".join(offering.casefold().split())
+
+
+def relevant_citations(result: QueryResult) -> dict[str, tuple[int, str]]:
+    pages = {}
+    for url in result.citations:
+        domain = host_of(url)
+        if domain and (weight := result.citation_weights.get(url)):
+            pages[domain] = max(pages.get(domain, (0, "")), (weight, url))
+    return pages
+
+
+def observed_visibility(request: AuditRequest, results: list[QueryResult], models: dict | None = None,
+                        intent_ids: list[str] | None = None) -> dict:
     target = host_of(request.target_url)
     groups: dict[str, list[int]] = {}
     branded = {r.prompt_index for r in results if r.status == "success" and r.generic_buyer_question is False}
     for index, prompt in enumerate(request.prompts):
         if has_brand(prompt, request.brand) or re.search(r"\b[\w-]+\.[a-z]{2,}\b", prompt, re.I):
             branded.add(index)
-        groups.setdefault(intent_key(prompt), []).append(index)
+        groups.setdefault(intent_ids[index] if intent_ids is not None else question_id(prompt), []).append(index)
 
     responses: dict[int, list[dict]] = {}
     for result in results:
@@ -72,11 +90,11 @@ def observed_visibility(request: AuditRequest, results: list[QueryResult], model
             if answer["classification"] != "api_failure" and provider in request.providers and provider not in counted:
                 answer["counted"] = True
                 counted[provider] = answer
-        questions.append({"id": sha256(key.encode()).hexdigest()[:16], "category": category,
+        questions.append({"id": key, "category": category,
                           "prompt_indices": indices, "answers": answers, "valid_answers": len(counted),
                           "cited_answers": sum(a["classification"] == "website_cited" for a in counted.values())})
 
-    comparison = [target, normalize(request.brand), request.mode, models,
+    comparison = [target, normalize(request.brand), request.mode, category_key(request.offering), models,
                   sorted((q["category"], [" ".join(request.prompts[i].casefold().split()) for i in q["prompt_indices"]])
                          for q in questions)]
     return {"categories": visibility_categories(questions, request.providers, models), "questions": questions,
@@ -107,40 +125,73 @@ def visibility_categories(questions, selected_providers, models=None):
     return categories
 
 
-def historical_visibility(audits):
+def historical_visibility(audits, target: str):
     questions = {}
     providers = set()
-    for request, results, created in audits:  # Newest audit first.
-        report = observed_visibility(request, results)
+    current = previous_score = None
+    for request, results, created, models, intent_ids in audits:  # Newest audit first.
+        report = observed_visibility(request, results, models, intent_ids)
+        discovery = report["categories"]["discovery"]
+        if current is None:
+            current = report
+        elif previous_score is None and current["comparison_key"] and current["comparison_key"] == report["comparison_key"]:
+            current_pct = current["categories"]["discovery"]["percentage"]
+            if current_pct is not None and discovery["percentage"] is not None:
+                previous_score = {"created": created, "percentage": discovery["percentage"],
+                                  "valid_answers": discovery["valid_answers"], "planned_answers": discovery["planned_answers"],
+                                  "change_pp": round(current_pct - discovery["percentage"], 1)}
         raw = {r.query_id: r for r in results}
         providers.update(request.providers)
         for question in report["questions"]:
             prompt = request.prompts[question["prompt_indices"][0]]
             group = questions.setdefault(question["id"], {"id": question["id"], "category": question["category"],
                                                            "prompt": prompt, "prompt_indices": [],
-                                                           "planned_providers": set(), "slots": {}})
+                                                           "planned_providers": set(), "slots": {}, "attempts": []})
             if question["category"] == "brand_knowledge":
                 group["category"] = "brand_knowledge"
             group["planned_providers"].update(request.providers)
             for answer in question["answers"]:
                 provider = answer["provider"]
+                result = raw[answer["query_id"]]
+                attempt = {"provider": provider, "prompt": request.prompts[answer["prompt_index"]], "audit_created": created,
+                           "classification": answer["classification"], "skipped": result.skipped, "model": (models or {}).get(provider)}
+                group["attempts"].append(attempt)
                 previous = group["slots"].get(provider)
                 if previous and (previous["counted"] or not answer["counted"]):
                     continue
                 if not answer["counted"] and answer["classification"] != "api_failure":
                     continue
-                result = raw[answer["query_id"]]
-                group["slots"][provider] = {**answer, "prompt": request.prompts[answer["prompt_index"]],
-                                             "excerpt": result.answer[:301], "error": result.error, "skipped": result.skipped,
-                                             "audit_created": created}
+                group["slots"][provider] = {**answer, **attempt, "excerpt": result.answer[:301], "error": result.error,
+                                             "relevant_citations": relevant_citations(result) if answer["counted"] else {}}
+    site_pages = {}
+    site_answers = Counter()
+    site_scores = Counter()
+    answered_discovery = 0
     for question in questions.values():
         answers = list(question.pop("slots").values())
         question["answers"] = answers
         question["valid_answers"] = sum(a["counted"] for a in answers)
         question["cited_answers"] = sum(a["classification"] == "website_cited" for a in answers)
         question["planned_providers"] = sorted(question["planned_providers"])
+        if question["category"] == "discovery" and question["valid_answers"]:
+            answered_discovery += 1
+            for answer in answers:
+                for domain, page in answer["relevant_citations"].items():
+                    if domain == target or domain.endswith("." + target):
+                        continue
+                    site_pages[domain] = max(site_pages.get(domain, (0, "")), page)
+                    site_answers[domain] += 1
+                    site_scores[domain] += 1 / question["valid_answers"]
+        for answer in answers:
+            del answer["relevant_citations"]
     rows = list(questions.values())
-    return {"categories": visibility_categories(rows, sorted(providers)), "questions": rows}
+    sites = sorted([
+        {"domain": domain, "url": url, "relevance_score": weight, "response_count": site_answers[domain],
+         "visibility_pct": round(100 * site_scores[domain] / answered_discovery, 1)}
+        for domain, (weight, url) in site_pages.items()
+    ], key=lambda site: (-site["relevance_score"], -site["visibility_pct"], site["domain"]))
+    return {"categories": visibility_categories(rows, sorted(providers)), "questions": rows,
+            "relevant_sites": sites, "previous": previous_score}
 
 
 def summarize(request: AuditRequest, results: list[QueryResult], models: dict | None = None) -> dict:
@@ -175,18 +226,11 @@ def summarize(request: AuditRequest, results: list[QueryResult], models: dict | 
         points.update(ranked)
         ranked_queries += any(ranked.values())
         visible.update(ranked.keys())
-        cited = set()
-        relevant = set()
-        for url in result.citations:
-            domain = host_of(url)
-            if not domain:
-                continue
-            cited.add(domain)
-            if weight := result.citation_weights.get(url):
-                relevant.add(domain)
-                relevant_pages[domain] = max(relevant_pages.get(domain, (0, "")), (weight, url))
-        domains.update(cited)
-        relevant_counts.update(relevant)
+        domains.update({host_of(url) for url in result.citations} - {""})
+        relevant = relevant_citations(result)
+        for domain, page in relevant.items():
+            relevant_pages[domain] = max(relevant_pages.get(domain, (0, "")), page)
+        relevant_counts.update(relevant.keys())
     total_points = sum(points.values())
     count = len(successful)
     visibility = round(100 * visible[request.brand] / count, 1) if count else None
