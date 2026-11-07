@@ -28,6 +28,7 @@
 .history-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
 .history-actions p { flex-basis: 100%; }
 .history-delete { color: #fda4af; }
+.optimizer-search-results > :first-child { margin-top: 0; }
 .visibility-ring { position: relative; display: grid; place-items: center; width: 144px; aspect-ratio: 1; }
 .visibility-ring svg { position: absolute; inset: 0; width: 100%; transform: rotate(-90deg); }
 .visibility-ring strong { font: 700 27px var(--mono); }

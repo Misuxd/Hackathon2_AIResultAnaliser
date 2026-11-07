@@ -222,6 +222,17 @@ test('optimizer shows a search-based review with links to the sources it used', 
   await expect(page.getByRole('heading', { name: 'Public search review' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'View source', exact: true })).toHaveAttribute('href', source);
   await expect(page.getByRole('button', { name: 'Copy code', exact: true })).toHaveCount(0);
+  const form = page.locator('.source-form');
+  const review = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Public search review', exact: true }) });
+  const recommendations = page.locator('section').filter({ has: page.getByRole('heading', { name: 'What to change and why', exact: true }) });
+  const [formBox, reviewBox, recommendationsBox] = await Promise.all([form.boundingBox(), review.boundingBox(), recommendations.boundingBox()]);
+  expect(recommendationsBox!.x).toBeGreaterThan(formBox!.x + formBox!.width);
+  expect(recommendationsBox!.x).toBe(reviewBox!.x);
+  expect(recommendationsBox!.y).toBeGreaterThan(reviewBox!.y + reviewBox!.height);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const [narrowForm, narrowReview] = await Promise.all([form.boundingBox(), review.boundingBox()]);
+  expect(narrowReview!.x).toBe(narrowForm!.x);
+  expect(narrowReview!.y).toBeGreaterThan(narrowForm!.y + narrowForm!.height);
 });
 
 test('optimizer recovers from a blocked fetch with browser page content', async ({ page }) => {

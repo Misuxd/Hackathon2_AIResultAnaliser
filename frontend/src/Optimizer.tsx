@@ -58,6 +58,12 @@ export default function Optimizer({ brand, url, prompt, health, autoOptimize, on
   const tabs = [{ key: 'optimized_markdown' as const, label: 'Markdown copy', file: 'product-copy.md', icon: FileText },
     { key: 'json_ld_script' as const, label: 'JSON-LD', file: 'structured-data.html', icon: FileCode2 },
     { key: 'llms_txt' as const, label: '/llms.txt', file: 'llms.txt', icon: FileText }];
+  const recommendations = assets && <section className="panel diagnosis"><span className="eyebrow">02 · PAGE CHANGES</span><h2>What to change and why</h2><p>Start with the buyer’s question and the facts your page can support.</p>
+    <ol className="recommendations">{assets.recommendations.map(item => <li key={item.title}><h3>{item.title}</h3>
+      <p><strong>Evidence.</strong> {item.evidence}</p><p><strong>Change.</strong> {item.change}</p><p><strong>Why.</strong> {item.why}</p>
+      {item.source_url && <p><a href={item.source_url} target="_blank" rel="noreferrer">View source</a></p>}
+    </li>)}</ol>
+  </section>;
 
   return <div className="optimizer-layout"><div>
     <form className="panel source-form" onSubmit={event => { event.preventDefault(); void review(); }}>
@@ -81,18 +87,16 @@ export default function Optimizer({ brand, url, prompt, health, autoOptimize, on
       <p className="fine-print">{mode === 'ai' ? 'Uses the selected provider account. Review every claim before publishing.' : 'Formats your supplied source. This does not use AI or make research claims.'}</p>
       {error && <div role="alert" className="notice">{error}{accessDenied && fetchPage && <button type="button" className="secondary small" onClick={() => { setFetchPage(false); setError(''); }}>Use browser page content</button>}</div>}
     </form>
-    {assets && <section className="panel diagnosis"><span className="eyebrow">02 · PAGE CHANGES</span><h2>What to change and why</h2><p>Start with the buyer’s question and the facts your page can support.</p>
-      <ol className="recommendations">{assets.recommendations.map(item => <li key={item.title}><h3>{item.title}</h3>
-        <p><strong>Evidence.</strong> {item.evidence}</p><p><strong>Change.</strong> {item.change}</p><p><strong>Why.</strong> {item.why}</p>
-        {item.source_url && <p><a href={item.source_url} target="_blank" rel="noreferrer">View source</a></p>}
-      </li>)}</ol>
-    </section>}
+    {!searchReview && recommendations}
     {assets && !searchReview && <section className="panel diagnosis"><span className="eyebrow">SOURCE DIAGNOSIS</span><h2>{assets.source_characters.toLocaleString()} characters inspected</h2><p className="fine-print">{assets.target_url}</p>{assets.checks.map(c => <div className="check-row" key={c.label}><span className={c.present ? 'check-icon' : 'missing-icon'}>{c.present ? <Check size={14} /> : '−'}</span><span>{c.label}</span><small>{c.present ? 'Present' : 'Not observed'}</small></div>)}
     </section>}
-  </div>{searchReview ? <section className="panel diagnosis"><span className="eyebrow">REVIEW SOURCE</span><h2>Public search review</h2>
-    <p>The site refused the direct fetch, so these recommendations use public search results from the same site. HTML checks and export drafts require the page content.</p>
-    <button type="button" className="secondary small" onClick={() => { setFetchPage(false); setAccessDenied(true); }}>Use browser page content</button>
-  </section> : <section className="panel output-panel"><div className="section-line"><div><span className="eyebrow">03 · REVIEW AND EXPORT</span><h2>Drafts for your product page</h2><p>Review the copy and structured data before applying the changes to your site.</p></div><span className="pill">{assets ? assets.mode === 'ai' ? 'AI DRAFT' : 'SOURCE EXPORT' : 'AWAITING SOURCE'}</span></div>
+  </div>{searchReview ? <div className="optimizer-search-results">
+    <section className="panel diagnosis"><span className="eyebrow">REVIEW SOURCE</span><h2>Public search review</h2>
+      <p>The site refused the direct fetch, so these recommendations use public search results from the same site. HTML checks and export drafts require the page content.</p>
+      <button type="button" className="secondary small" onClick={() => { setFetchPage(false); setAccessDenied(true); }}>Use browser page content</button>
+    </section>
+    {recommendations}
+  </div> : <section className="panel output-panel"><div className="section-line"><div><span className="eyebrow">03 · REVIEW AND EXPORT</span><h2>Drafts for your product page</h2><p>Review the copy and structured data before applying the changes to your site.</p></div><span className="pill">{assets ? assets.mode === 'ai' ? 'AI DRAFT' : 'SOURCE EXPORT' : 'AWAITING SOURCE'}</span></div>
     <div className="output-toolbar"><div className="tab-buttons" role="tablist" aria-label="GEO deliverables">{tabs.map(t => <button key={t.key} role="tab" id={`tab-${t.key}`} aria-selected={tab === t.key} aria-controls="asset-output" className={tab === t.key ? 'active' : ''} onClick={() => setTab(t.key)}><t.icon size={14} />{t.label}</button>)}</div>
       <div className="output-actions"><button className="icon-button" aria-label="Download current asset" disabled={!assets} onClick={() => assets && download(tabs.find(t => t.key === tab)!.file, assets[tab])}><ArrowDownToLine size={16} /></button><button className="primary small" disabled={!assets} onClick={copy}>{copied ? <CheckCheck size={14} /> : <Copy size={14} />}{copied ? 'Copied' : 'Copy code'}</button></div></div>
     {assets ? <><div className="code-header"><span className="mono">{tabs.find(t => t.key === tab)?.file}</span><span>REVIEW BEFORE PUBLISHING</span></div><pre role="tabpanel" id="asset-output" aria-labelledby={`tab-${tab}`} tabIndex={0}><code>{assets[tab]}</code></pre><div className="asset-warnings">{assets.warnings.map(w => <p key={w}>{w}</p>)}</div></> : <div className="output-empty" id="asset-output" role="tabpanel" aria-labelledby={`tab-${tab}`}><FileCode2 size={40} /><h3>Your next version starts here.</h3><p>Supply product content to generate a rewrite,<br />Product + FAQ structured data, and an llms.txt draft.<br />No invented reviews. No promised ranking gains.</p></div>}
