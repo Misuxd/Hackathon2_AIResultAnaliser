@@ -2,6 +2,17 @@ import { expect, test } from '@playwright/test';
 
 test('20-query audit, visibility result, evidence, optimizer and exports', async ({ page }) => {
   const errors: string[] = [];
+  const reviews: Record<string, unknown>[] = [];
+  await page.route('**/api/v1/health', route => route.fulfill({ json: { status: 'ok', deployment: 'single-user', fetch_hosts: [],
+    providers: [{ id: 'openai', configured: true, model: 'test-model' }] } }));
+  await page.route('**/api/v1/optimize', route => {
+    const body = route.request().postDataJSON();
+    if (body.mode !== 'ai') return route.continue();
+    reviews.push(body);
+    return route.fulfill({ json: { mode: 'ai', provider: 'openai', target_url: 'https://example.com/product', source_characters: 120,
+      recommendations: [{ title: 'Put pipeline details first', evidence: 'Includes shared deal stages.', change: 'Add a buyer-facing heading for shared deal stages.', why: 'This gives AI search a direct answer about CRM features.' }],
+      checks: [], optimized_markdown: '# Draft', json_ld_script: '', llms_txt: '', warnings: [] } });
+  });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Your next customer/ })).toBeVisible();
@@ -56,6 +67,10 @@ test('20-query audit, visibility result, evidence, optimizer and exports', async
   await page.getByRole('button', { name: 'All prompts', exact: true }).click();
   await page.getByRole('button', { name: 'Optimize for this question', exact: true }).first().click();
   await expect(page.getByText('SELECTED BUYER QUESTION')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Put pipeline details first' })).toBeVisible();
+  expect(reviews).toHaveLength(1);
+  expect(reviews[0]).toMatchObject({ buyer_question: 'What are the best options for CRM software?',
+    target_url: 'https://example.com/product', fetch_page: true, mode: 'ai', provider: 'openai' });
   const fetchPage = page.getByLabel('Fetch the public product page');
   await fetchPage.check();
   await expect(page.getByLabel(/Allowed redirect hostnames/)).toBeEditable();
@@ -78,6 +93,10 @@ test('20-query audit, visibility result, evidence, optimizer and exports', async
   await page.getByRole('button', { name: 'Download current asset' }).click();
   expect((await downloaded).suggestedFilename()).toBe('llms.txt');
   await page.screenshot({ path: 'test-results/optimizer-desktop.png', fullPage: true });
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'GEO optimizer', exact: true }).click();
+  await expect(page.getByLabel('Buyer question', { exact: true })).toHaveValue('');
+  expect(reviews).toHaveLength(1);
   await page.getByRole('button', { name: 'Audit history', exact: true }).click();
   const history = page.getByRole('dialog');
   await expect(history).toContainText('Browser Test CRM');

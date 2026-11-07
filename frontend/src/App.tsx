@@ -21,6 +21,8 @@ export default function App() {
   const [healthError, setHealthError] = useState('');
   const [form, setForm] = useState<AuditRequest>(initialRequest);
   const [prompt, setPrompt] = useState('');
+  const [autoOptimize, setAutoOptimize] = useState(false);
+  const consumeAutoOptimize = useCallback(() => setAutoOptimize(false), []);
   const [history, setHistory] = useState<PastAudit[]>([]);
   const [historyError, setHistoryError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -40,7 +42,10 @@ export default function App() {
   const activeUrl = audit?.request.target_url || form.target_url;
   let domain = '';
   try { domain = new URL(activeUrl).hostname; } catch { /* URL is still being entered. */ }
-  const jump = (id: string) => { setView(id); document.getElementById('main-content')?.focus(); window.scrollTo({ top: 0 }); };
+  const jump = (id: string) => {
+    if (id !== 'optimizer') setAutoOptimize(false);
+    setView(id); document.getElementById('main-content')?.focus(); window.scrollTo({ top: 0 });
+  };
   async function showHistory() {
     setHistoryError(''); setConfirmDelete(false); setHistory([]); dialog.current?.showModal();
     try { setHistory(await api<PastAudit[]>('/audits')); } catch (e) { setHistoryError((e as Error).message); }
@@ -56,7 +61,7 @@ export default function App() {
   return <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar"><div className="brand-lockup"><span className="brand-mark">A<span /></span><div><strong>AIResults<span className="brand-period">.</span></strong><small>VISIBILITY INTELLIGENCE</small></div></div>
-      <nav aria-label="Audit workflow">{views.map(v => <button aria-current={view === v.id ? 'page' : undefined} title={v.label} key={v.id} className={`nav-item ${view === v.id ? 'active' : ''}`} onClick={() => jump(v.id)}><v.icon size={20} /><span>{v.label}</span>{v.id === 'audit' && busy && <span className="nav-live" />}{view === v.id && <ChevronRight size={14} className="nav-arrow" />}</button>)}</nav>
+      <nav aria-label="Audit workflow">{views.map(v => <button aria-current={view === v.id ? 'page' : undefined} title={v.label} key={v.id} className={`nav-item ${view === v.id ? 'active' : ''}`} onClick={() => { if (v.id === 'optimizer' && view !== 'optimizer') setPrompt(''); jump(v.id); }}><v.icon size={20} /><span>{v.label}</span>{v.id === 'audit' && busy && <span className="nav-live" />}{view === v.id && <ChevronRight size={14} className="nav-arrow" />}</button>)}</nav>
       <div className="sidebar-bottom">
         <button className="nav-item" onClick={showHistory} title="Audit history"><History size={19} /><span>Audit history</span></button>
       </div>
@@ -73,8 +78,9 @@ export default function App() {
         }}>Set up a live audit <ArrowRight size={14} /></button></div>}
         {view === 'overview' && <Overview audit={audit} launch={() => jump('audit')} diagnose={() => jump('citations')} />}
         {view === 'audit' && <AuditLauncher form={form} setForm={setForm} health={health} audit={audit} launch={launch} busy={busy} refresh={refresh} inspect={() => jump('citations')} />}
-        {view === 'citations' && <CitationMatrix audit={audit} launch={() => jump('audit')} fix={p => { setPrompt(p); jump('optimizer'); }} />}
-        {view === 'optimizer' && <Optimizer brand={audit?.request.brand || form.brand} url={activeUrl} prompt={prompt} health={health} />}
+        {view === 'citations' && <CitationMatrix audit={audit} launch={() => jump('audit')} fix={p => { setPrompt(p); setAutoOptimize(true); jump('optimizer'); }} />}
+        {view === 'optimizer' && <Optimizer brand={audit?.request.brand || form.brand} url={activeUrl} prompt={prompt} health={health}
+          autoOptimize={autoOptimize} onAutoStart={consumeAutoOptimize} />}
         <footer className="page-footer"><span><Check size={12} /> Evidence before assumptions.</span><span>AIResults Assistant <span className="muted">/</span> GEO workspace</span></footer>
       </main>
     </div>

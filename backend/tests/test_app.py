@@ -279,10 +279,32 @@ class ContentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspected["json_ld"][0]["@graph"][0]["@type"], "Product")
 
     async def test_ai_rewrite_rejects_invented_numeric_claims(self):
-        response = {"output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps({"optimized_markdown": "Acme promises 99.99% availability and is best for every team."})}]}]}
+        response = {"output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps({"optimized_markdown": "Acme promises 99.99% availability and is best for every team.", "recommendations": []})}]}]}
         with patch("app.optimizer.key_for", return_value="test-key"), patch("app.optimizer.post_json", new=AsyncMock(return_value=response)):
             with self.assertRaisesRegex(ValueError, "unsupported numbers"):
                 await rewrite_with_ai(OptimizationRequest(brand="Acme", target_url="https://acme.com"), "Acme CRM manages pipelines for sales teams.")
+
+    async def test_geo_review_fetches_page_and_returns_question_specific_evidence(self):
+        page = {"url": "https://www.acme.com/product", **inspect_html(
+            "<title>Acme billing</title><main><h1>Invoicing</h1><p>Schedule automatic reminders for overdue invoices.</p></main>")}
+        question = "Which accounting tools support automated invoice reminders?"
+        draft = {"optimized_markdown": "# Acme invoicing\n\nSchedule automatic reminders for overdue invoices.",
+                 "recommendations": [
+                     {"title": "Surface invoice reminders", "evidence_quote": "Schedule automatic reminders for overdue invoices.",
+                      "change": "Add an Invoice reminders heading above the reminder sentence.", "why": "The heading directly matches the buyer question."},
+                     {"title": "Fabricated", "evidence_quote": "Reminders work offline.", "change": "Repeat it.", "why": "A false claim."},
+                 ]}
+        response = {"output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps(draft)}]}]}
+        req = OptimizationRequest(brand="Acme", target_url="https://acme.com/product", fetch_page=True, buyer_question=question)
+        with patch("app.optimizer.fetch_page", new=AsyncMock(return_value=page)) as fetch, \
+             patch("app.optimizer.key_for", return_value="test-key"), \
+             patch("app.optimizer.post_json", new=AsyncMock(return_value=response)) as provider:
+            assets = await optimize(req)
+        fetch.assert_awaited_once_with(req.target_url, [])
+        self.assertIn(question, provider.call_args.args[-1]["input"])
+        self.assertIn("Acme billing", provider.call_args.args[-1]["input"])
+        self.assertEqual(assets["target_url"], page["url"])
+        self.assertEqual([item["title"] for item in assets["recommendations"]], ["Surface invoice reminders"])
 
 
 class APITests(unittest.TestCase):
