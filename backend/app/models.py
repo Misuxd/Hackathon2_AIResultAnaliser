@@ -1,6 +1,7 @@
 from enum import StrEnum
 import ipaddress
 import re
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -53,9 +54,10 @@ class AuditRequest(InputModel):
         values = [v.strip() for v in values]
         if any(not v or len(v) > 500 for v in values):
             raise ValueError("Entries must contain 1–500 characters")
-        if len({v.casefold() for v in values}) != len(values):
-            raise ValueError("Remove duplicate entries")
-        return values
+        distinct = {}
+        for value in values:
+            distinct.setdefault(" ".join(value.casefold().split()), value)
+        return list(distinct.values())
 
     @model_validator(mode="after")
     def distinct_providers(self):
@@ -70,6 +72,12 @@ class BrandMention(InputModel):
     sentiment: str = Field(default="neutral", pattern="^(positive|neutral|negative)$")
     evidence: str = Field(min_length=1, max_length=1000)
     reason_for_inclusion: str = Field(max_length=1000)
+    is_recommendation: bool = False
+
+
+class RelevantSource(InputModel):
+    citation: str = Field(min_length=1, max_length=2048)
+    match: Literal["direct", "related"]
 
 
 class ExtractedAnswer(InputModel):
@@ -77,6 +85,7 @@ class ExtractedAnswer(InputModel):
     mentions: list[BrandMention] = Field(max_length=30)
     structural_winner_patterns: list[str] = Field(default_factory=list, max_length=10)
     generic_buyer_question: bool | None = None
+    relevant_sources: list[RelevantSource] = Field(default_factory=list)
 
 
 class QueryResult(BaseModel):
@@ -88,6 +97,7 @@ class QueryResult(BaseModel):
     answer: str = ""
     mentions: list[BrandMention] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    citation_weights: dict[str, Literal[50, 100]] = Field(default_factory=dict)
     structural_winner_patterns: list[str] = Field(default_factory=list)
     generic_buyer_question: bool | None = None
     error: str | None = None

@@ -59,5 +59,13 @@ export function useAudit() {
     } catch (e) { setError((e as Error).message); }
     finally { launchLock.current = false; setLaunching(false); }
   }
-  return { audit, error, connection, launching, launch, open: (auditId: string) => { setAudit(null); setId(auditId); } };
+  function clear() {
+    localStorage.removeItem('geo-audit');
+    setId(null);
+    setAudit(null);
+    setError('');
+    setConnection('');
+  }
+
+  return { audit, error, connection, launching, launch, clear, open: (auditId: string) => { setAudit(null); setId(auditId); } };
 }

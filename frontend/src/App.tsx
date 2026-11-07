@@ -1,4 +1,4 @@
-import { Activity, ArrowRight, Check, ChevronRight, CircleHelp, ExternalLink, History, LayoutDashboard, Menu, Plus, Radio, RefreshCw, ScanSearch, Settings2, Sparkles, X } from 'lucide-react';
+import { Activity, ArrowRight, Check, ChevronRight, History, LayoutDashboard, Menu, Plus, Radio, RefreshCw, ScanSearch, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AuditLauncher, { initialRequest } from './AuditLauncher';
 import Optimizer from './Optimizer';
@@ -23,8 +23,10 @@ export default function App() {
   const [prompt, setPrompt] = useState('');
   const [history, setHistory] = useState<PastAudit[]>([]);
   const [historyError, setHistoryError] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
-  const { audit, error, connection, launching, launch, open } = useAudit();
+  const { audit, error, connection, launching, launch, open, clear } = useAudit();
   const busy = launching || audit?.status === 'running';
   const refresh = useCallback(() => {
     api<Health>('/health').then(data => { setHealth(data); setHealthError(''); }).catch(() => {
@@ -40,15 +42,23 @@ export default function App() {
   try { domain = new URL(activeUrl).hostname; } catch { /* URL is still being entered. */ }
   const jump = (id: string) => { setView(id); document.getElementById('main-content')?.focus(); window.scrollTo({ top: 0 }); };
   async function showHistory() {
-    setHistoryError(''); dialog.current?.showModal();
+    setHistoryError(''); setConfirmDelete(false); setHistory([]); dialog.current?.showModal();
     try { setHistory(await api<PastAudit[]>('/audits')); } catch (e) { setHistoryError((e as Error).message); }
+  }
+  async function deleteHistory() {
+    setDeleting(true); setHistoryError('');
+    try {
+      await api('/audits', { method: 'DELETE' });
+      clear(); setHistory([]); setConfirmDelete(false); jump('overview');
+    } catch (e) { setHistoryError((e as Error).message); }
+    finally { setDeleting(false); }
   }
   return <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar"><div className="brand-lockup"><span className="brand-mark">A<span /></span><div><strong>AIResults<span className="brand-period">.</span></strong><small>VISIBILITY INTELLIGENCE</small></div></div>
-      <nav aria-label="Audit workflow">{views.map(v => <button aria-current={view === v.id ? 'page' : undefined} title={v.label} key={v.id} className={`nav-item ${view === v.id ? 'active' : ''}`} onClick={() => jump(v.id)}><v.icon size={18} /><span>{v.label}</span>{v.id === 'audit' && busy && <span className="nav-live" />}{view === v.id && <ChevronRight size={14} className="nav-arrow" />}</button>)}</nav>
+      <nav aria-label="Audit workflow">{views.map(v => <button aria-current={view === v.id ? 'page' : undefined} title={v.label} key={v.id} className={`nav-item ${view === v.id ? 'active' : ''}`} onClick={() => jump(v.id)}><v.icon size={20} /><span>{v.label}</span>{v.id === 'audit' && busy && <span className="nav-live" />}{view === v.id && <ChevronRight size={14} className="nav-arrow" />}</button>)}</nav>
       <div className="sidebar-bottom">
-        <button className="nav-item" onClick={showHistory} title="Audit history"><History size={17} /><span>Audit history</span></button><button className="nav-item" onClick={() => jump('audit')} title="Engine setup"><Settings2 size={17} /><span>Engine setup</span></button><a className="nav-item" href="https://schema.org/Product" target="_blank" rel="noreferrer" title="Structured data reference"><CircleHelp size={17} /><span>Schema reference</span><ExternalLink size={12} /></a>
+        <button className="nav-item" onClick={showHistory} title="Audit history"><History size={19} /><span>Audit history</span></button>
       </div>
     </aside>
     <div className="main-shell"><header className="topbar"><div className="breadcrumb"><button className="icon-button" aria-label="Toggle navigation" onClick={() => setCollapsed(!collapsed)}><Menu size={19} /></button><strong>{current.label}</strong></div><div className="topbar-actions"><span className="api-status"><span className={`status-dot ${configured ? 'ready' : ''}`} />{configured} / {ENGINES.length} engines configured</span>{view !== 'audit' && <button className="primary small" onClick={() => jump('audit')}><Plus size={15} />New audit</button>}</div></header>
@@ -68,8 +78,14 @@ export default function App() {
         <footer className="page-footer"><span><Check size={12} /> Evidence before assumptions.</span><span>AIResults Assistant <span className="muted">/</span> GEO workspace</span></footer>
       </main>
     </div>
-    <dialog ref={dialog} className="history-dialog"><div className="section-line"><div><span className="eyebrow">PERSISTED IN THIS WORKSPACE</span><h2>Recent audits</h2></div><button className="icon-button" aria-label="Close history" onClick={() => dialog.current?.close()}><X size={20} /></button></div>
-      {historyError && <p role="alert" className="notice">{historyError}</p>}{!history.length && <p className="muted">No saved audits yet.</p>}{history.map(h => <button className="history-item" key={h.id} onClick={() => { open(h.id); jump('overview'); dialog.current?.close(); }}><span className="workspace-avatar"><History size={16} /></span><div><strong>{h.brand}</strong><small>{new Date(h.created * 1000).toLocaleString()} · {h.mode} · {h.status}</small></div><ArrowRight size={16} /></button>)}
+    <dialog ref={dialog} className="history-dialog" onCancel={event => { if (deleting) event.preventDefault(); }}><div className="section-line"><div><span className="eyebrow">PERSISTED IN THIS WORKSPACE</span><h2>Recent audits</h2></div><button className="icon-button" aria-label="Close history" disabled={deleting} onClick={() => dialog.current?.close()}><X size={20} /></button></div>
+      {historyError && <p role="alert" className="notice">{historyError}</p>}{!history.length && <p className="muted">No saved audits yet.</p>}{history.map(h => <button className="history-item" key={h.id} disabled={deleting} onClick={() => { open(h.id); jump('overview'); dialog.current?.close(); }}><span className="workspace-avatar"><History size={16} /></span><div><strong>{h.brand}</strong><small>{new Date(h.created * 1000).toLocaleString()} · {h.mode} · {h.status}</small></div><ArrowRight size={16} /></button>)}
+      {history.length > 0 && <div className="history-actions">
+        {confirmDelete ? <><p>Permanently delete all saved audits and their answers? This resets the history used for visibility scores.</p>
+          <button className="secondary small" disabled={deleting} onClick={() => setConfirmDelete(false)}>Cancel</button>
+          <button className="secondary small history-delete" disabled={deleting || busy} onClick={deleteHistory}>{deleting ? 'Deleting…' : 'Delete all saved audits'}</button></>
+          : <button className="secondary small history-delete" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete history</button>}
+      </div>}
     </dialog>
   </div>;
 }

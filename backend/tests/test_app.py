@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app import store
-from app.evaluator import has_brand, summarize
+from app.evaluator import has_brand, observed_visibility, summarize
 from app.main import app
 from app.models import AuditRequest, OptimizationRequest, Provider, QueryResult, public_url
 from app.optimizer import optimize, rewrite_with_ai
@@ -69,31 +69,79 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(has_brand("AcmeCloud", "Acme"))
         self.assertTrue(has_brand("Try ACME, Inc.", "Acme"))
 
+    def test_observed_visibility_weights_distinct_questions_and_excludes_failures(self):
+        req = request(prompts=["Best tools for small teams?", "Which are the top tools for small teams?",
+                               "Tools with offline access?", "Tools without offline access?", "Is Acme good?"])
+        def result(index, provider="openai", answer="", status="success", citations=(), **fields):
+            return QueryResult(query_id=f"{index}:{provider}", prompt_index=index, provider=provider, mode="live",
+                               answer=answer, status=status, citations=list(citations), **fields)
+        report = observed_visibility(req, [
+            result(0, answer="See the [product details](https://shop.acme.com/product).", citations=["https://shop.acme.com/product"]),
+            result(0, "perplexity", status="error"), result(1, answer="Try other products."),
+            result(2, answer="Acme has an offline mode.", citations=["https://acme.com.example.org/"]),
+            result(2, "perplexity", answer="Try Rival.", mentions=[{"brand_name": "Rival", "evidence": "Try Rival.",
+                                                                   "reason_for_inclusion": "Offline mode", "is_recommendation": True}]),
+            result(3, status="error"), result(3, "perplexity", status="error"),
+            result(4, answer="Acme is an option.", citations=["https://www.acme.com/product"]),
+        ])
+        score = report["categories"]["discovery"]
+        self.assertEqual((score["percentage"], score["brand_mention_pct"]), (50, 33.3))
+        self.assertEqual((score["distinct_questions"], score["answered_questions"]), (3, 2))
+        self.assertEqual((score["valid_answers"], score["planned_answers"]), (3, 6))
+        self.assertEqual([row["percentage"] for row in score["providers"]], [50, 0])
+        self.assertEqual(report["categories"]["brand_knowledge"]["percentage"], 100)
+        self.assertEqual(report["questions"][0]["prompt_indices"], [0, 1])
+        self.assertEqual([a["classification"] for a in report["questions"][1]["answers"]], ["brand_only", "neither"])
+        self.assertEqual(report["questions"][1]["answers"][1]["competitors"], ["Rival"])
+
+    def test_website_weight_uses_relevance_before_citation_frequency(self):
+        direct = "https://www.retailer.example/electronics"
+        related = "https://alternatives.example/electronics"
+        incidental = "https://anpc.ro/consumer-rights"
+        first = QueryResult(query_id="0:openai", prompt_index=0, provider="openai", mode="live", status="success",
+                            citations=[direct, "https://retailer.example/related", related, incidental],
+                            citation_weights={direct: 100, "https://retailer.example/related": 50, related: 50})
+        second = first.model_copy(update={"query_id": "0:perplexity", "provider": Provider.perplexity,
+                                         "citations": [related, incidental], "citation_weights": {related: 50}})
+        summary = summarize(request(offering="electronics"), [first, second])
+        self.assertEqual(summary["relevant_sites"], [
+            {"domain": "retailer.example", "url": direct, "relevance_score": 100, "response_count": 1},
+            {"domain": "alternatives.example", "url": related, "relevance_score": 50, "response_count": 2},
+        ])
+
     def test_input_validation(self):
         for url in ["http://acme.com", "https://localhost", "https://127.0.0.1", "https://169.254.169.254/latest", "https://user:pass@acme.com", "https://acme.com:8443", "javascript:alert(1)"]:
             with self.subTest(url=url), self.assertRaises(ValueError):
                 public_url(url)
         self.assertEqual(public_url("https://ACME.com/x#fragment"), "https://acme.com/x")
-        for changes in [{"prompts": []}, {"prompts": ["same", "same"]}, {"providers": ["openai", "openai"]}]:
+        self.assertEqual(request(prompts=["Same question?", "same  question?"]).prompts, ["Same question?"])
+        for changes in [{"prompts": []}, {"providers": ["openai", "openai"]}]:
             with self.subTest(changes=changes), self.assertRaises(ValidationError):
                 request(**changes)
 
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_grounding_and_evidence_for_both_native_adapters(self):
-        extracted = {"answer": "1. Acme — documented product.[3]", "mentions": [{"brand_name": "Acme", "rank_position": 1,
-                     "sentiment": "neutral", "evidence": "1. Acme", "reason_for_inclusion": "Documented product"}], "structural_winner_patterns": []}
+        extracted = {"answer": "1. Acme — documented product.[3] Consumer rights also apply.[5]", "mentions": [{"brand_name": "Acme", "rank_position": 1,
+                     "sentiment": "neutral", "evidence": "1. Acme", "reason_for_inclusion": "Documented product"}],
+                     "structural_winner_patterns": [], "relevant_sources": [
+                         {"citation": "https://acme.com/product#offer", "match": "direct"},
+                         {"citation": "[4]", "match": "direct"},
+                         {"citation": "https://acme.com/uncited", "match": "direct"},
+                     ]}
         text = json.dumps(extracted)
         calls = []
         def handler(req):
             calls.append(req)
             if req.url.host == "api.openai.com":
                 body = {"output": [{"type": "web_search_call", "status": "completed"}, {"type": "message", "content": [{"type": "output_text", "text": text,
-                        "annotations": [{"type": "url_citation", "url": "https://acme.com/product"}]}]}]}
+                        "annotations": [{"type": "url_citation", "url": "https://acme.com/product"},
+                                        {"type": "url_citation", "url": "https://anpc.ro/consumer-rights"}]}]}]}
             else:
+                numbered = {**extracted, "relevant_sources": [{"citation": "[3]", "match": "direct"}, *extracted["relevant_sources"][1:]]}
                 body = {"output": [{"type": "search_results", "results": [{"id": 3, "url": "https://acme.com/product"},
-                        {"id": 4, "url": "https://acme.com/uncited"}]},
-                        {"type": "message", "content": [{"type": "output_text", "text": text}]}]}
+                        {"id": 4, "url": "https://acme.com/uncited"}, {"id": 5, "url": "https://anpc.ro/consumer-rights"}]},
+                        {"type": "message", "content": [{"type": "output_text", "text": json.dumps(numbered)}]}]}
             return httpx.Response(200, json=body)
         with patch.dict(os.environ, {"GEO_OPENAI_KEY": "test-key", "GEO_PERPLEXITY_KEY": "test-key", "GEO_PERPLEXITY_MODEL": "sonar-pro"}):
             async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -101,7 +149,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                     result = await live_result(client, request(mode="live"), 0, provider)
                     self.assertEqual(result.mode, "live")
                     self.assertEqual(result.mentions[0].brand_name, "Acme")
-                    self.assertEqual(result.citations, ["https://acme.com/product"])
+                    self.assertEqual(result.citations, ["https://acme.com/product", "https://anpc.ro/consumer-rights"])
+                    self.assertEqual(result.citation_weights, {"https://acme.com/product": 100})
                 self.assertEqual(json.loads(calls[0].content)["tools"], [{"type": "web_search"}])
                 self.assertNotIn("Acme", json.loads(calls[0].content)["input"])
                 self.assertEqual(calls[1].url.path, "/v1/agent")
@@ -151,6 +200,15 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"output": []}))) as client:
                 with self.assertRaisesRegex(ValueError, "grounding"):
                     await live_result(client, request(mode="live"), 0, Provider.openai)
+
+    async def test_grounded_answer_without_citations_succeeds(self):
+        response = {"output": [{"type": "web_search_call", "status": "completed"},
+                               {"type": "message", "content": [{"type": "output_text", "text": '{"answer":"Try Acme.","mentions":[]}'}]}]}
+        with patch("app.providers.key_for", return_value="test-key"):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response))) as client:
+                result = await live_result(client, request(mode="live"), 0, Provider.openai)
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.citations, [])
 
     async def test_bad_mention_is_removed_and_valid_rank_is_recovered_from_answer(self):
         value = {"answer": "1. **Other CRM**\n2. Acme is another option.", "mentions": [
@@ -251,6 +309,8 @@ class APITests(unittest.TestCase):
         audit = self.client.get(f"/api/v1/audits/{audit_id}").json()
         self.assertEqual(audit["summary"]["successful_queries"], 20)
         self.assertEqual(audit["summary"]["generic_visibility"]["successful_answers"], 20)
+        self.assertEqual(audit["summary"]["observed_visibility"]["categories"]["discovery"]["valid_answers"], 20)
+        self.assertEqual(audit["request"]["provider_models"], {"openai": "synthetic", "perplexity": "synthetic"})
         replay = self.client.get(f"/api/v1/audits/{audit_id}/stream", headers={"Last-Event-ID": "19"})
         self.assertEqual(replay.text.count("event: result\n"), 1)
         self.assertIn("event: complete", replay.text)
@@ -275,6 +335,61 @@ class APITests(unittest.TestCase):
         store.init()
         self.assertEqual(store.get(audit_id)["status"], "failed")
         self.assertEqual(store.events(audit_id, 0)[0]["kind"], "failed")
+
+    def test_previous_visibility_requires_matching_questions_and_models(self):
+        req = request(providers=["openai"])
+        result = demo_result(req, 0, Provider.openai)
+        result.citations = []
+        first = store.create(req.model_dump())
+        store.finish(first, summarize(req, [result], {"openai": "model-a"}))
+        result.citations = [req.target_url]
+        different = store.create(req.model_dump())
+        store.finish(different, summarize(req, [result], {"openai": "model-b"}))
+        self.assertNotIn("previous", store.get(different)["summary"]["observed_visibility"])
+        latest = store.create(req.model_dump())
+        store.finish(latest, summarize(req, [result], {"openai": "model-a"}))
+        self.assertEqual(store.get(latest)["summary"]["observed_visibility"]["previous"]["change_pp"], 100)
+
+    def test_visibility_history_deduplicates_and_keeps_latest_valid_provider_answer(self):
+        def save(prompts, answers, **changes):
+            req = request(prompts=prompts, **changes)
+            results = [QueryResult(query_id=f"{i}:{provider}", prompt_index=i, provider=provider, mode=req.mode,
+                                   status="error" if cited is None else "success", answer="Try a CRM.",
+                                   citations=[req.target_url] if cited else []) for i, provider, cited in answers]
+            audit_id = store.create(req.model_dump())
+            for result in results:
+                store.append(audit_id, "result", result.model_dump())
+            store.finish(audit_id, summarize(req, results))
+            return audit_id
+
+        prior = save(["Best CRM?", "Which CRM works offline?"], [(0, "openai", True), (1, "openai", True)], providers=["openai"])
+        save(["What is CRM?"], [(0, "openai", True)], providers=["openai"], target_url="https://other.example/")
+        save(["What is CRM?"], [(0, "openai", True)], providers=["openai"], mode="live")
+        current = save(["Which are the top CRM?", "How much does a CRM cost?"], [
+            (0, "openai", False), (0, "perplexity", True), (1, "openai", None), (1, "perplexity", False),
+        ])
+        last = save(["Best CRM?"], [(0, "openai", None)], providers=["openai"])
+        for audit_id in (current, last):
+            audit = self.client.get(f"/api/v1/audits/{audit_id}").json()
+            report = audit["summary"]["history_visibility"]
+            discovery = report["categories"]["discovery"]
+            self.assertEqual((discovery["percentage"], discovery["distinct_questions"]), (50, 3))
+            self.assertEqual((discovery["valid_answers"], discovery["planned_answers"]), (4, 5))
+        prior_report = self.client.get(f"/api/v1/audits/{prior}").json()["summary"]["history_visibility"]
+        self.assertEqual(prior_report["categories"]["discovery"]["distinct_questions"], 2)
+
+    def test_delete_history_removes_audits_and_events_and_protects_running_work(self):
+        completed = store.create(request().model_dump())
+        store.finish(completed, {"successful_queries": 0})
+        running = store.create(request().model_dump())
+        self.assertEqual(self.client.delete("/api/v1/audits").status_code, 409)
+        self.assertEqual(len(store.history()), 2)
+        store.fail(running, "Cancelled")
+        self.assertEqual(self.client.delete("/api/v1/audits").json(), {"deleted": 2})
+        self.assertEqual(self.client.get("/api/v1/audits").json(), [])
+        self.assertEqual(self.client.get(f"/api/v1/audits/{completed}").status_code, 404)
+        self.assertEqual(store.events(completed, 0), [])
+        self.assertEqual(store.events(running, 0), [])
 
     def test_saved_results_from_retired_engine_remain_readable(self):
         payload = request().model_dump() | {"providers": ["gemini"]}

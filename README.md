@@ -75,11 +75,13 @@ Vite serves the UI on port 5173 and proxies `/api` to the local backend. API doc
 ## Workflow
 
 1. Enter your brand, HTTPS product URL, and product category or buyer need. Use **Suggest prompts** to generate unbranded questions, or write up to ten. Ten questions across both engines plan 20 answers.
-2. Read the circular visibility result at the end of Live Audit. It counts successful answers to eligible generic questions that name the brand or cite the target hostname. Overview shows which answers contributed, ranked brand shares, and how often each website was cited. Use the Citation Matrix to inspect or export the original evidence.
+2. Read the AI Visibility Score at the end of Live Audit or at the top of Overview. It measures observed website citations across the tested unbranded questions and providers. Read brand mentions and test coverage beside the score. Overview also shows branded questions, answer evidence, comparable prior scores, ranked brand shares, and relevant websites. Use the Citation Matrix to inspect or export the original evidence.
 3. Open the optimizer from a citation row. Paste product content or select **Fetch the public product page**. You can add allowed redirect hostnames for that request.
 4. Review recommended changes for buyer intent, retrieval, authority, and page structure. Choose AI rewrite or source-only export, then review and copy or download the drafts you want to apply.
 
-Visibility uses successful answers only. Weighted share uses rank weights of 3, 2, 1, and 0.5. Unranked mentions earn zero rank points. Each cited domain counts once per successful answer. FAQ markup must correspond to visible page content. llms.txt is a Markdown export for review.
+The score averages the share of responding providers citing the evaluated hostname or its subdomains for each answered discovery question in the site’s saved history. Live and demo audits are scored separately. Wording rules group near-identical questions, and each provider contributes its latest valid answer per question. Coverage includes each distinct question and provider tested. Opening an older audit shows the history up to that audit. Per-audit comparisons use the same audited hostname, question set, providers, and model settings. To reset saved results, open **Audit history** and choose **Delete history**.
+
+Weighted share uses rank weights of 3, 2, 1, and 0.5. Unranked mentions earn zero rank points. Website relevance uses the strongest matching citation for each domain. A direct offer scores 100% and a related offer in the same category scores 50%. For equal scores, each domain counts once per successful answer that cites a matching page. FAQ markup must correspond to visible page content. llms.txt is a Markdown export for review.
 
 ## Validate
 

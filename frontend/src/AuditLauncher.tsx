@@ -1,5 +1,6 @@
 import { ArrowRight, Check, LoaderCircle, Radio, RefreshCw, WandSparkles } from 'lucide-react';
 import { citesSite, clientMention, ENGINES, namesBrand, type Audit, type AuditRequest, type Health, type QueryResult } from './types';
+import { ProviderScores, ScoreStats } from './Visibility';
 
 function suggestedPrompts(category: string) {
   return [
@@ -36,15 +37,24 @@ export default function AuditLauncher({ form, setForm, health, audit, launch, bu
   const live = form.mode === 'live';
   const configuredProviders = health?.providers.filter(p => p.configured).map(p => p.id) ?? [];
   const providers = live ? form.providers.filter(p => configuredProviders.includes(p)) : form.providers;
-  const total = form.prompts.filter(p => p.trim()).length * providers.length;
+  const unique = new Set<string>();
+  const prompts = form.prompts.map(prompt => prompt.trim()).filter(prompt => {
+    const key = prompt.toLowerCase().replace(/\s+/g, ' ');
+    if (!key || unique.has(key)) return false;
+    unique.add(key);
+    return true;
+  });
+  const total = prompts.length * providers.length;
   const category = form.offering?.trim() ?? '';
-  const visibility = audit?.summary?.generic_visibility;
+  const visibility = (audit?.summary?.history_visibility ?? audit?.summary?.observed_visibility)?.categories.discovery;
   const percentage = visibility?.percentage;
+  const successfulAnswers = audit?.results.filter(result => result.status === 'success')
+    .sort((a, b) => a.prompt_index - b.prompt_index || a.provider.localeCompare(b.provider)) ?? [];
   const accessErrors = Array.from(new Set(audit?.results.filter(r => r.access_error).map(r => r.error)));
   return <><div className="launch-layout">
     <form className="panel launch-form" onSubmit={event => {
       event.preventDefault();
-      if (total > 0) launch({ ...form, providers, prompts: form.prompts.filter(p => p.trim()) });
+      if (total > 0) launch({ ...form, providers, prompts });
     }}>
       <div className="panel-heading"><span className="step-dot">01</span><div><h2>Set up your audit</h2><p>Describe what you sell, then choose the questions and engines to test.</p></div></div>
       <div className="field-row"><label>Brand name<input required minLength={2} maxLength={80} placeholder="e.g. CloudScale CRM" value={form.brand} onChange={e => update('brand', e.target.value)} /></label>
@@ -53,7 +63,7 @@ export default function AuditLauncher({ form, setForm, health, audit, launch, bu
       <div className="section-line"><label htmlFor="prompts">Buyer prompts <span className="muted">one per line · 1–10</span></label>
         <button className="text-button" type="button" disabled={!category} onClick={() => update('prompts', suggestedPrompts(category))}><WandSparkles size={14} /> Suggest prompts</button></div>
       <textarea id="prompts" className="prompt-input" required rows={10} value={form.prompts.join('\n')} onChange={e => update('prompts', e.target.value.split('\n'))} />
-      <p className="fine-print">For the visibility score, use your category phrase and leave brand names and websites out of the question.</p>
+      <p className="fine-print">Use unbranded buyer questions for discovery. Questions naming a brand, product, or website are reported separately.</p>
       <fieldset><legend>Search-grounded engines</legend><div className="engine-choices">{ENGINES.map(engine => {
         const configured = configuredProviders.includes(engine.id);
         const selected = providers.includes(engine.id);
@@ -65,7 +75,7 @@ export default function AuditLauncher({ form, setForm, health, audit, launch, bu
       <div className="mode-row"><label htmlFor="mode">Run mode</label><select id="mode" value={form.mode} onChange={e => update('mode', e.target.value as 'live' | 'demo')}><option value="live">Live · real provider API calls</option><option value="demo">Demo · synthetic data, no API calls</option></select></div>
       {live && health && configuredProviders.length === 0 && <div className="notice">Configure at least one API key to run a live audit.</div>}
       {form.mode === 'demo' && <div className="notice">Demo results are synthetic and cannot be used to assess actual brand visibility.</div>}
-      <button className="primary full" type="submit" disabled={busy || total === 0 || form.prompts.filter(p => p.trim()).length > 10}>
+      <button className="primary full" type="submit" disabled={busy || total === 0 || prompts.length > 10}>
         {busy ? <LoaderCircle className="spin" size={17} /> : <Radio size={17} />}{busy ? 'Audit in progress' : `Launch ${total}-query ${form.mode === 'live' ? 'live' : 'demo'} audit`}<ArrowRight size={17} />
       </button><p className="fine-print center">Live mode uses your provider accounts and may incur API charges.</p>
     </form>
@@ -82,24 +92,30 @@ export default function AuditLauncher({ form, setForm, health, audit, launch, bu
           {accessErrors.map(error => <p className="notice" key={error}>{error}</p>)}
           </> : <div className="radar-idle"><div className="radar-orbit"><Radio size={30} /></div><h3>Ready when you are</h3><p>Follow each engine’s answer here as the audit runs.</p></div>}
       </section>
-      <div className="small-note"><Check size={16} /><p>Every live result requires web-grounding citations. Failures stay visible and are excluded from metrics.</p></div>
+      <div className="small-note"><Check size={16} /><p>Live audits use web search. Valid answers can contain no citations. Failures stay visible and are excluded from the score.</p></div>
     </div>
   </div>
   {audit?.summary && <section className="panel audit-result" id="audit-result" aria-labelledby="audit-result-title">
     <div className="visibility-result">
-      <div className="visibility-ring" role="img" aria-label={percentage == null ? 'Visibility unavailable' : `${percentage}% visibility`}>
+      <div className="visibility-ring" role="img" aria-label={percentage == null ? 'Observed visibility unavailable' : `${percentage}% observed visibility`}>
         <svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="51" className="ring-track" />
           {percentage != null && <circle cx="60" cy="60" r="51" pathLength="100" strokeDasharray={`${percentage} 100`} className="ring-fill" />}</svg>
         <strong>{percentage == null ? '—' : `${percentage}%`}</strong>
       </div>
-      <div><span className="eyebrow">{audit.request.mode === 'demo' ? 'DEMO RESULT' : 'AUDIT RESULT'}</span><h2 id="audit-result-title">Visibility on generic buyer questions</h2>
-        {percentage != null ? <p>Named or cited in <strong>{visibility?.appearances} of {visibility?.successful_answers}</strong> successful answers to {visibility?.prompt_indices.length} eligible questions.</p>
-          : <p>{visibility ? 'No eligible questions received a successful answer.' : 'This saved audit predates generic visibility scoring.'}</p>}
-        <p>Each successful answer counts once if it names your brand or cites your site. Only unbranded questions containing the category phrase count.</p>
+      <div><span className="eyebrow">{audit.request.mode === 'demo' ? 'DEMO RESULT' : 'AUDIT RESULT'}</span><h2 id="audit-result-title">AI Visibility Score</h2>
+        <p>{percentage == null ? 'No observed visibility score is available.' : 'Observed website visibility across unique unbranded questions in this site’s audit history.'}</p>
+        {visibility && <><ScoreStats score={visibility} /><ProviderScores score={visibility} /></>}
+        <p><strong>{audit.summary.successful_queries} of {audit.summary.total_queries}</strong> planned queries returned successful answers.</p>
         {audit.summary.failed_queries > 0 && <p>{audit.summary.failed_queries} queries failed or were skipped. Open the Citation Matrix for details.</p>}
         <button className="secondary small" onClick={inspect}>Inspect answers and sources <ArrowRight size={14} /></button>
       </div>
     </div>
+    {successfulAnswers.length > 0 && <div className="successful-answers"><h3>Successful answers</h3>
+      {successfulAnswers.map(result => <details className="data-details" key={result.query_id}>
+        <summary>{ENGINES.find(engine => engine.id === result.provider)?.name ?? result.provider} · {audit.request.prompts[result.prompt_index]}</summary>
+        <p className="answer-text">{result.answer}</p>
+      </details>)}
+    </div>}
   </section>}
   </>;
 }
