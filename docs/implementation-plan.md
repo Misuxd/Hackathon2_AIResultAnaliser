@@ -23,7 +23,7 @@ The supplied document is a product brief. Its traffic-loss, revenue, ranking-cau
 
 ## Implemented scope
 
-- Four responsive workflow views with keyboard-accessible forms, chart data tables, and reduced-motion handling. Project Guide adds setup instructions, downloadable source documents, and an implementation summary.
+- Four responsive React/TypeScript views with Obsidian/Slate/Electric Lime hierarchy, keyboard-accessible forms, chart data tables and reduced-motion handling.
 - OpenAI Responses with web search and the Perplexity Agent API. Both require cited web evidence for audit results and retry transient connection and service failures within bounds.
 - One to ten buyer prompts across selected providers. Four provider requests can run concurrently across up to three active audits. A provider access or billing failure on the first request skips the remaining calls for that engine.
 - Sequence-numbered SQLite event log, SSE progress/replay, persisted audit JSON, recent history, explicit failure states and interrupted-job recovery without automatic paid retries.
@@ -47,12 +47,12 @@ The supplied document is a product brief. Its traffic-loss, revenue, ranking-cau
 1. Python tests cover metric denominators, rank verification, input boundaries, both provider contracts, failure handling, content exports, and audit persistence and replay.
 2. TypeScript and production build pass.
 3. Real-browser workflow covers the 20-query demo audit, visibility result, saved reload, citation evidence, optimizer recommendations, exports, engine readiness, and mobile layout.
-4. Verify live calls separately for each provider. The last recorded check succeeded for one OpenAI audit query. Perplexity returned a billing-related 403 and requires an API project with available credits. Live AI rewrite still needs separate end-to-end verification.
+4. Live provider audit and AI rewrite require actual credentials and allowed API destinations. Mocked contract tests do not prove access, quota or current model compatibility. Keep this gate pending until a real request succeeds.
 
 ## Production follow-ups
 
-Before public hosting, add authentication, authorization, CSRF protection, tenant-scoped data, retention policies, rate limits, durable workers, isolated outbound network policy, and monitoring. Review security before exposure. Before billing customers, verify providers on representative audits and define reproducibility limits.
+Before public hosting: authentication, authorization, CSRF protection, tenant-scoped data, encrypted retention/deletion policies, rate limiting/credit accounting, durable workers, isolated egress and DNS pinning against rebinding, monitoring and security review. Before billing customers: representative live-provider evaluation, ranking-extraction calibration, alias management and defined reproducibility limits.
 
 Browser-rendered crawling, Supabase, trend deltas and automated website publishing are deferred. No environment publication or Git push is included. Generated content requires editorial review; no provider appearance or search uplift is guaranteed.
 
-Public HTTPS fetching passed a live check on the local setup. If DNS is unavailable, the fetcher can resolve through Google Public DNS over HTTPS, which requires access to `dns.google`. The page fetch still needs a direct connection to the validated public IP. Pasted-source processing works independently.
+Managed-cloud network finding: local DNS resolution is unavailable even outside the command sandbox. The fetcher falls back to Google Public DNS over verified HTTPS, still checking all returned addresses. `dns.google` is therefore an additional outbound requirement here. Live page fetching remains pending until that network change is applied; pasted-source processing works independently.

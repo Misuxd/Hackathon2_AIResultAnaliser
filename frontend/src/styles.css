@@ -41,14 +41,3 @@
 .site-chart .engine-bar-heading span { text-align: right; }
 .site-chart .bar-track { margin-left: 0; }
 .authority .data-details a { color: var(--pop); }
-.project-guide { display: grid; gap: 18px; max-width: 980px; }
-.project-guide > section, .guide-commands > div { min-width: 0; }
-.project-guide p, .project-guide li { font-size: 13px; line-height: 1.65; }
-.project-guide p, .project-guide h3, .project-guide li + li { margin-top: 10px; }
-.project-guide ol, .project-guide ul { padding-left: 22px; margin: 12px 0; }
-.project-guide a { color: var(--pop); text-decoration: underline; }
-.guide-heading { flex-wrap: wrap; }
-.guide-commands { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 12px; margin-top: 14px; }
-.project-guide pre { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 12px; margin: 8px 0 0; overflow-x: auto; font: 11px/1.6 var(--mono); }
-.project-guide details { margin-top: 16px; }
-.project-guide summary { cursor: pointer; color: var(--pop); }

@@ -1,8 +1,7 @@
-import { Activity, ArrowRight, BookOpen, Check, ChevronRight, CircleHelp, ExternalLink, History, LayoutDashboard, Menu, Plus, Radio, RefreshCw, ScanSearch, Settings2, Sparkles, X } from 'lucide-react';
+import { Activity, ArrowRight, Check, ChevronRight, CircleHelp, ExternalLink, History, LayoutDashboard, Menu, Plus, Radio, RefreshCw, ScanSearch, Settings2, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AuditLauncher, { initialRequest } from './AuditLauncher';
 import Optimizer from './Optimizer';
-import ProjectGuide from './ProjectGuide';
 import { CitationMatrix, Overview } from './Results';
 import { api, ENGINES, type AuditRequest, type Health } from './types';
 import { useAudit } from './useAudit';
@@ -12,7 +11,6 @@ const views = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, title: 'Review your audit results', subtitle: 'Compare brand mentions and rankings across the questions you tested.' },
   { id: 'citations', label: 'Citation matrix', icon: ScanSearch, title: 'See what the engines answered', subtitle: 'Compare answers and cited pages question by question.' },
   { id: 'optimizer', label: 'GEO optimizer', icon: Sparkles, title: 'Improve your product page', subtitle: 'Get specific changes that help AI search find, interpret, and verify your content.' },
-  { id: 'guide', label: 'Project guide', icon: BookOpen, title: 'Project guide', subtitle: 'Set up the app, read the implementation plan, and see what is ready to use.' },
 ];
 type PastAudit = { id: string; created: number; brand: string; mode: string; status: string };
 
@@ -48,14 +46,13 @@ export default function App() {
   return <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar"><div className="brand-lockup"><span className="brand-mark">A<span /></span><div><strong>AIResults<span className="brand-period">.</span></strong><small>VISIBILITY INTELLIGENCE</small></div></div>
-      <nav aria-label="App navigation">{views.map(v => <button aria-current={view === v.id ? 'page' : undefined} title={v.label} key={v.id} className={`nav-item ${view === v.id ? 'active' : ''}`} onClick={() => jump(v.id)}><v.icon size={18} /><span>{v.label}</span>{v.id === 'audit' && busy && <span className="nav-live" />}{view === v.id && <ChevronRight size={14} className="nav-arrow" />}</button>)}</nav>
+      <nav aria-label="Audit workflow">{views.map(v => <button aria-current={view === v.id ? 'page' : undefined} title={v.label} key={v.id} className={`nav-item ${view === v.id ? 'active' : ''}`} onClick={() => jump(v.id)}><v.icon size={18} /><span>{v.label}</span>{v.id === 'audit' && busy && <span className="nav-live" />}{view === v.id && <ChevronRight size={14} className="nav-arrow" />}</button>)}</nav>
       <div className="sidebar-bottom">
         <button className="nav-item" onClick={showHistory} title="Audit history"><History size={17} /><span>Audit history</span></button><button className="nav-item" onClick={() => jump('audit')} title="Engine setup"><Settings2 size={17} /><span>Engine setup</span></button><a className="nav-item" href="https://schema.org/Product" target="_blank" rel="noreferrer" title="Structured data reference"><CircleHelp size={17} /><span>Schema reference</span><ExternalLink size={12} /></a>
       </div>
     </aside>
     <div className="main-shell"><header className="topbar"><div className="breadcrumb"><button className="icon-button" aria-label="Toggle navigation" onClick={() => setCollapsed(!collapsed)}><Menu size={19} /></button><strong>{current.label}</strong></div><div className="topbar-actions"><span className="api-status"><span className={`status-dot ${configured ? 'ready' : ''}`} />{configured} / {ENGINES.length} engines configured</span>{view !== 'audit' && <button className="primary small" onClick={() => jump('audit')}><Plus size={15} />New audit</button>}</div></header>
-      <main id="main-content" tabIndex={-1}><div className="page-heading"><div><div className="eyebrow">GENERATIVE ENGINE OPTIMIZATION <span className="eyebrow-divider">/</span> {current.label.toUpperCase()}</div><h1>{current.title}</h1><p>{current.subtitle}</p></div>{domain && view !== 'guide' && <span className="domain-pill"><span className="status-dot" /><span>{domain}</span></span>}</div>
-        {view === 'guide' ? <ProjectGuide /> : <>
+      <main id="main-content" tabIndex={-1}><div className="page-heading"><div><div className="eyebrow">GENERATIVE ENGINE OPTIMIZATION <span className="eyebrow-divider">/</span> {current.label.toUpperCase()}</div><h1>{current.title}</h1><p>{current.subtitle}</p></div>{domain && <span className="domain-pill"><span className="status-dot" /><span>{domain}</span></span>}</div>
         <div className="workspace-meta"><div><span className="live-indicator" /><span>{audit ? `${audit.request.brand} · ${audit.request.prompts.length} buyer prompts` : 'A clearer view of AI search'} </span>{audit && <span className={`mode-badge ${audit.request.mode === 'demo' ? 'demo' : ''}`}>{audit.request.mode === 'demo' ? 'SYNTHETIC DEMO' : 'LIVE API AUDIT'}</span>}</div><span className="mono">{audit ? new Date(audit.created * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'OPENAI · PERPLEXITY'}</span></div>
         {healthError && <div className="notice" role="alert">{healthError}<button className="text-button" onClick={refresh}><RefreshCw size={14} />Retry</button></div>}
         {error && <div className="notice" role="alert">{error}</div>}
@@ -68,7 +65,6 @@ export default function App() {
         {view === 'audit' && <AuditLauncher form={form} setForm={setForm} health={health} audit={audit} launch={launch} busy={busy} refresh={refresh} inspect={() => jump('citations')} />}
         {view === 'citations' && <CitationMatrix audit={audit} launch={() => jump('audit')} fix={p => { setPrompt(p); jump('optimizer'); }} />}
         {view === 'optimizer' && <Optimizer brand={audit?.request.brand || form.brand} url={activeUrl} prompt={prompt} health={health} />}
-        </>}
         <footer className="page-footer"><span><Check size={12} /> Evidence before assumptions.</span><span>AIResults Assistant <span className="muted">/</span> GEO workspace</span></footer>
       </main>
     </div>

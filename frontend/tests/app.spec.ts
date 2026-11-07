@@ -111,27 +111,6 @@ test('live audits use only configured engines and demo keeps all engines availab
   await expect(page.getByText('10 / 10 queries')).not.toBeVisible();
 });
 
-test('project guide includes the source documents and works without the API', async ({ page }) => {
-  await page.route('**/api/v1/**', route => route.abort());
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Project guide', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'README', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Implementation plan', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'What’s been done' })).toBeVisible();
-  await page.getByText('Read the full README', { exact: true }).click();
-  await expect(page.getByRole('region', { name: 'README' }).locator('details pre')).toContainText('backend/requirements.lock');
-  await page.getByText('Read the full implementation plan', { exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Implementation plan' }).locator('details pre')).toContainText('## Acceptance gates');
-  const readme = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download README' }).click();
-  expect((await readme).suggestedFilename()).toBe('README.md');
-  const plan = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download plan' }).click();
-  expect((await plan).suggestedFilename()).toBe('implementation-plan.md');
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-});
-
 test('mobile layout fits the viewport and navigation stays usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 280 });
   await page.goto('/');
